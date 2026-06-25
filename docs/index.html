@@ -367,6 +367,7 @@ function makeCard(name, canvas) {
   const pr = document.createElement('button');
   pr.className = 'btn';
   pr.textContent = 'Print';
+  pr.setAttribute('aria-label', 'Print ' + name);
   pr.onclick = () => printImages([canvas.toDataURL('image/png')]);
   card.appendChild(pr);
   const dl = document.createElement('button');
@@ -402,6 +403,7 @@ function printImages(dataUrls) {
     `<div class="page"><img src="${u}"></div>`
   ).join('');
 
+  const returnFocus = document.activeElement;  // restore after the dialog closes
   const iframe = document.createElement('iframe');
   iframe.setAttribute('aria-hidden', 'true');
   iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
@@ -430,7 +432,10 @@ function printImages(dataUrls) {
   const go = () => {
     iframe.contentWindow.focus();
     iframe.contentWindow.print();
-    setTimeout(() => iframe.remove(), 1000);
+    setTimeout(() => {
+      iframe.remove();
+      if (returnFocus && returnFocus.focus) returnFocus.focus();
+    }, 1000);
   };
   if (!pending) return go();
   imgs.forEach((im) => {
