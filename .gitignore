@@ -1,0 +1,13 @@
+# Source images (don't commit your own/copyrighted pictures)
+in/*
+!in/.gitkeep
+
+# Generated coloring pages
+out/
+
+# Tooling
+.gstack/
+
+# OS / editor cruft
+.DS_Store
+*.swp

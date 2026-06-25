@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Coloring Page Maker</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --ink: #1f2937;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --line: #e5e7eb;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    text-align: center;
+    padding: 48px 16px 24px;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 1.75rem;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+  }
+  header p { margin: 8px 0 0; color: var(--muted); font-size: 1rem; }
+  main { max-width: 960px; margin: 0 auto; padding: 0 20px 40px; }
+
+  .drop {
+    display: block;
+    border: 2px dashed #cbd5e1;
+    border-radius: var(--radius);
+    background: var(--card);
+    padding: 44px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .drop:hover { border-color: var(--accent); background: #f8faff; }
+  .drop.over { background: #eff4ff; border-color: var(--accent); }
+  .drop .primary { font-size: 1.05rem; font-weight: 550; }
+  .drop strong { color: var(--accent); font-weight: 650; }
+  .drop .hint { color: var(--muted); font-size: 0.875rem; margin-top: 8px; }
+  .drop input { display: none; }
+
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px 32px;
+    align-items: center;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px 22px;
+    margin: 20px 0;
+  }
+  .controls label {
+    font-size: 0.8rem;
+    font-weight: 550;
+    color: var(--muted);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .controls .row {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink);
+    font-size: 0.9rem;
+    font-weight: 500;
+  }
+  select {
+    font: inherit;
+    font-size: 0.9rem;
+    color: var(--ink);
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+  }
+  input[type="range"] { accent-color: var(--accent); width: 180px; }
+  input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
+
+  .status {
+    text-align: center;
+    min-height: 1.4em;
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin: 8px 0 16px;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    gap: 20px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px;
+    text-align: center;
+  }
+  .card canvas {
+    width: 100%;
+    height: auto;
+    border-radius: 8px;
+    background: #fff;
+    border: 1px solid var(--line);
+  }
+  .card .name {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin: 10px 0;
+    word-break: break-all;
+  }
+  .btn {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    text-decoration: none;
+    border: none;
+    border-radius: 8px;
+    padding: 9px 18px;
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 550;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn:hover { background: var(--accent-hover); }
+  .btn.secondary {
+    background: #fff;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+  }
+  .btn.secondary:hover { background: #eff4ff; }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+  .btn.secondary:disabled:hover { background: #fff; }
+  .actions { display: flex; justify-content: center; gap: 12px; margin: 8px 0 24px; }
+  footer {
+    text-align: center;
+    padding: 32px 16px;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Coloring Page Maker</h1>
+  <p>Turn any picture into a printable outline for kids to color.</p>
+</header>
+
+<main>
+  <label class="drop" id="drop">
+    <input type="file" id="file" accept="image/*" multiple />
+    <div class="primary"><strong>Click to upload</strong> or drag images here</div>
+    <div class="hint">PNG, JPG, or WEBP &middot; multiple files supported</div>
+  </label>
+
+  <div class="controls">
+    <label>
+      Line style
+      <select id="style">
+        <option value="threshold">Bold (coloring book)</option>
+        <option value="edges">Thin (sketch)</option>
+      </select>
+    </label>
+    <label>
+      Detail (fewer to more lines)
+      <input type="range" id="sensitivity" min="1" max="20" value="5" />
+    </label>
+    <label class="row">
+      <input type="checkbox" id="thumb" checked />
+      Show color guide in corner
+    </label>
+    <label>
+      Guide size
+      <input type="range" id="thumbScale" min="10" max="40" value="25" />
+    </label>
+  </div>
+
+  <div class="status" id="status">Loading the image engine…</div>
+  <div class="actions">
+    <button class="btn secondary" id="downloadAll" disabled>Download all</button>
+  </div>
+  <div class="grid" id="grid"></div>
+</main>
+
+<footer>Runs entirely in your browser. Your images never leave your device.</footer>
+
+<script>
+// ---- OpenCV.js readiness ------------------------------------------------
+let cvReady = false;
+const statusEl = document.getElementById('status');
+function onOpenCvReady() {
+  cv['onRuntimeInitialized'] = () => {
+    cvReady = true;
+    statusEl.textContent = 'Ready! Drop in some pictures.';
+  };
+}
+
+// ---- State --------------------------------------------------------------
+const results = []; // { name, canvas }
+const grid = document.getElementById('grid');
+
+// ---- Controls -----------------------------------------------------------
+const el = (id) => document.getElementById(id);
+const styleEl = el('style'), sensEl = el('sensitivity');
+const thumbEl = el('thumb'), thumbScaleEl = el('thumbScale');
+
+// Re-run everything when a setting changes (only if we have originals cached).
+const originals = []; // { name, img }
+[styleEl, sensEl, thumbEl, thumbScaleEl].forEach((c) =>
+  c.addEventListener('change', rerunAll)
+);
+
+// ---- File intake --------------------------------------------------------
+const drop = el('drop'), fileInput = el('file');
+fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+['dragenter', 'dragover'].forEach((ev) =>
+  drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); })
+);
+['dragleave', 'drop'].forEach((ev) =>
+  drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); })
+);
+drop.addEventListener('drop', (e) => handleFiles(e.dataTransfer.files));
+
+async function handleFiles(fileList) {
+  if (!cvReady) { statusEl.textContent = 'Still loading the engine — try again in a moment.'; return; }
+  const files = [...fileList].filter((f) => f.type.startsWith('image/'));
+  if (!files.length) return;
+  for (const f of files) {
+    const img = await loadImage(f);
+    originals.push({ name: stem(f.name), img });
+  }
+  rerunAll();
+}
+
+function stem(filename) {
+  return filename.replace(/\.[^.]+$/, '');
+}
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+// ---- Core conversion (mirrors coloringify.py) ---------------------------
+function makeColoringPage(img) {
+  // Flatten any transparency onto white by drawing over a white canvas.
+  const src = document.createElement('canvas');
+  src.width = img.naturalWidth;
+  src.height = img.naturalHeight;
+  const sctx = src.getContext('2d');
+  sctx.fillStyle = '#ffffff';
+  sctx.fillRect(0, 0, src.width, src.height);
+  sctx.drawImage(img, 0, 0);
+
+  const mat = cv.imread(src);                 // RGBA
+  const gray = new cv.Mat();
+  cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+  const out = new cv.Mat();
+
+  if (styleEl.value === 'edges') {
+    const blur = new cv.Mat();
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+    cv.Canny(blur, out, 50, 150);
+    cv.bitwise_not(out, out);                 // black lines on white
+    blur.delete();
+  } else {
+    const blur = new cv.Mat();
+    cv.medianBlur(gray, blur, 5);
+    const C = parseInt(sensEl.value, 10);     // higher = fewer lines
+    cv.adaptiveThreshold(blur, out, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY, 9, C);
+    blur.delete();
+  }
+
+  // Render the outline to an output canvas.
+  const outCanvas = document.createElement('canvas');
+  cv.imshow(outCanvas, out);
+
+  // Color-reference thumbnail, top-right corner.
+  if (thumbEl.checked) {
+    const ctx = outCanvas.getContext('2d');
+    const W = outCanvas.width, H = outCanvas.height;
+    const margin = Math.round(W * 0.015) + 6;
+    const scale = parseInt(thumbScaleEl.value, 10) / 100;
+    let tw = Math.max(1, Math.round(W * scale));
+    let th = Math.max(1, Math.round(tw * src.height / src.width));
+    if (th > H - 2 * margin) { th = H - 2 * margin; tw = Math.round(th * src.width / src.height); }
+    const x = W - margin - tw, y = margin;
+    ctx.drawImage(src, x, y, tw, th);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = Math.max(2, Math.round(W * 0.003));
+    ctx.strokeRect(x, y, tw, th);
+  }
+
+  mat.delete(); gray.delete(); out.delete();
+  return outCanvas;
+}
+
+// ---- Render -------------------------------------------------------------
+function rerunAll() {
+  if (!cvReady || !originals.length) return;
+  grid.innerHTML = '';
+  results.length = 0;
+  statusEl.textContent = 'Drawing…';
+  // Defer so the status paints before the (synchronous) heavy work.
+  setTimeout(() => {
+    for (const { name, img } of originals) {
+      const canvas = makeColoringPage(img);
+      results.push({ name, canvas });
+      grid.appendChild(makeCard(name, canvas));
+    }
+    el('downloadAll').disabled = results.length === 0;
+    statusEl.textContent = `${results.length} page(s) ready. Print and color!`;
+  }, 20);
+}
+
+function makeCard(name, canvas) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.appendChild(canvas);
+  const label = document.createElement('div');
+  label.className = 'name';
+  label.textContent = name + '.png';
+  card.appendChild(label);
+  const dl = document.createElement('button');
+  dl.className = 'btn';
+  dl.textContent = 'Download';
+  dl.onclick = () => downloadCanvas(canvas, name);
+  card.appendChild(dl);
+  return card;
+}
+
+function downloadCanvas(canvas, name) {
+  canvas.toBlob((blob) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name + '.png';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }, 'image/png');
+}
+
+el('downloadAll').onclick = () => {
+  results.forEach((r, i) => setTimeout(() => downloadCanvas(r.canvas, r.name), i * 250));
+};
+</script>
+<script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()"></script>
+</body>
+</html>
