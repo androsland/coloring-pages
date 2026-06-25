@@ -141,6 +141,7 @@
     cursor: pointer;
     transition: background 0.15s;
   }
+  .card .btn { margin: 0 3px; }
   .btn:hover { background: var(--accent-hover); }
   .btn.secondary {
     background: #fff;
@@ -192,10 +193,27 @@
       Guide size
       <input type="range" id="thumbScale" min="10" max="40" value="25" />
     </label>
+    <label>
+      Paper size
+      <select id="paper">
+        <option value="A4">A4</option>
+        <option value="letter">Letter</option>
+      </select>
+    </label>
+    <label>
+      Print size
+      <select id="printSize">
+        <option value="100">Full page</option>
+        <option value="80">Large</option>
+        <option value="55">Medium</option>
+        <option value="35">Small</option>
+      </select>
+    </label>
   </div>
 
   <div class="status" id="status">Loading the image engine…</div>
   <div class="actions">
+    <button class="btn" id="printAll" disabled>Print all</button>
     <button class="btn secondary" id="downloadAll" disabled>Download all</button>
   </div>
   <div class="grid" id="grid"></div>
@@ -331,7 +349,9 @@ function rerunAll() {
       results.push({ name, canvas });
       grid.appendChild(makeCard(name, canvas));
     }
-    el('downloadAll').disabled = results.length === 0;
+    const empty = results.length === 0;
+    el('downloadAll').disabled = empty;
+    el('printAll').disabled = empty;
     statusEl.textContent = `${results.length} page(s) ready. Print and color!`;
   }, 20);
 }
@@ -344,8 +364,13 @@ function makeCard(name, canvas) {
   label.className = 'name';
   label.textContent = name + '.png';
   card.appendChild(label);
+  const pr = document.createElement('button');
+  pr.className = 'btn';
+  pr.textContent = 'Print';
+  pr.onclick = () => printImages([canvas.toDataURL('image/png')]);
+  card.appendChild(pr);
   const dl = document.createElement('button');
-  dl.className = 'btn';
+  dl.className = 'btn secondary';
   dl.textContent = 'Download';
   dl.onclick = () => downloadCanvas(canvas, name);
   card.appendChild(dl);
@@ -365,6 +390,57 @@ function downloadCanvas(canvas, name) {
 el('downloadAll').onclick = () => {
   results.forEach((r, i) => setTimeout(() => downloadCanvas(r.canvas, r.name), i * 250));
 };
+
+// ---- Printing -----------------------------------------------------------
+// Render the chosen pages into a hidden iframe sized to the selected paper,
+// then trigger the browser's print dialog. Each page gets its own sheet.
+function printImages(dataUrls) {
+  if (!dataUrls.length) return;
+  const paper = el('paper').value;               // 'A4' | 'letter'
+  const pct = parseInt(el('printSize').value, 10); // % of the printable area
+  const pages = dataUrls.map((u) =>
+    `<div class="page"><img src="${u}"></div>`
+  ).join('');
+
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('aria-hidden', 'true');
+  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+  document.body.appendChild(iframe);
+  const doc = iframe.contentWindow.document;
+  doc.open();
+  doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    @page { size: ${paper}; margin: 10mm; }
+    html, body { margin: 0; padding: 0; }
+    .page {
+      height: 96vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      break-after: page;
+      page-break-after: always;
+    }
+    .page:last-child { break-after: auto; page-break-after: auto; }
+    img { max-width: ${pct}%; max-height: ${pct}%; }
+  </style></head><body>${pages}</body></html>`);
+  doc.close();
+
+  // Wait for all images to decode before printing, else blank sheets.
+  const imgs = [...doc.images];
+  let pending = imgs.length;
+  const go = () => {
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+    setTimeout(() => iframe.remove(), 1000);
+  };
+  if (!pending) return go();
+  imgs.forEach((im) => {
+    if (im.complete) { if (--pending === 0) go(); }
+    else im.onload = im.onerror = () => { if (--pending === 0) go(); };
+  });
+}
+
+el('printAll').onclick = () =>
+  printImages(results.map((r) => r.canvas.toDataURL('image/png')));
 </script>
 <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()"></script>
 </body>
