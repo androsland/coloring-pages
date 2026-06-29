@@ -91,6 +91,23 @@
     border-radius: 8px;
     background: #fff;
   }
+  .controls label .lbl {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .val {
+    font-variant-numeric: tabular-nums;
+    font-weight: 650;
+    color: var(--accent);
+    background: #eff4ff;
+    border-radius: 6px;
+    padding: 1px 7px;
+    font-size: 0.8rem;
+    min-width: 2.4em;
+    text-align: center;
+  }
   input[type="range"] { accent-color: var(--accent); width: 180px; }
   input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
 
@@ -183,7 +200,7 @@
       </select>
     </label>
     <label>
-      Detail (fewer to more lines)
+      <span class="lbl">Detail (fewer to more lines) <output id="sensitivityVal" class="val">5</output></span>
       <input type="range" id="sensitivity" min="1" max="20" value="5" />
     </label>
     <label class="row">
@@ -195,7 +212,7 @@
       Remove specks
     </label>
     <label>
-      Guide size
+      <span class="lbl">Guide size <output id="thumbScaleVal" class="val">25%</output></span>
       <input type="range" id="thumbScale" min="10" max="40" value="25" />
     </label>
     <label>
@@ -246,6 +263,19 @@ const el = (id) => document.getElementById(id);
 const styleEl = el('style'), sensEl = el('sensitivity');
 const thumbEl = el('thumb'), thumbScaleEl = el('thumbScale');
 const despeckleEl = el('despeckle');
+const sensValEl = el('sensitivityVal'), thumbScaleValEl = el('thumbScaleVal');
+
+// Live value readouts for the range sliders, updated as you drag.
+const syncSensVal = () => { sensValEl.textContent = sensEl.value; };
+const syncThumbVal = () => { thumbScaleValEl.textContent = thumbScaleEl.value + '%'; };
+sensEl.addEventListener('input', syncSensVal);
+thumbScaleEl.addEventListener('input', syncThumbVal);
+syncSensVal(); syncThumbVal();
+
+// Once the user picks a style by hand, stop auto-suggesting one on upload.
+let userPickedStyle = false;
+let autoStyleHint = '';
+styleEl.addEventListener('change', () => { userPickedStyle = true; autoStyleHint = ''; });
 
 // Re-run everything when a setting changes (only if we have originals cached).
 const originals = []; // { name, img }
@@ -272,6 +302,7 @@ async function handleFiles(fileList) {
     const img = await loadImage(f);
     originals.push({ name: stem(f.name), img });
   }
+  if (!userPickedStyle) applyStyleSuggestion();
   rerunAll();
 }
 
@@ -286,6 +317,57 @@ function loadImage(file) {
     img.onerror = reject;
     img.src = URL.createObjectURL(file);
   });
+}
+
+// ---- Style suggestion ---------------------------------------------------
+// Guess a good default from the image itself. If it already has black ink
+// outlines (lots of dark, low-saturation pixels) over large flat regions,
+// it's cartoon/clip art -> "lineart". Otherwise (photos, colored-outline art)
+// -> "threshold". Cheap pure-JS pass on a downscaled copy; no OpenCV Mats.
+function suggestStyle(img) {
+  const MAX = 480;
+  const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.max(1, Math.round(img.naturalWidth * scale));
+  const h = Math.max(1, Math.round(img.naturalHeight * scale));
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h);   // flatten transparency
+  ctx.drawImage(img, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  const lum = new Float32Array(w * h);
+  let inkCount = 0;
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    const v = mx, s = mx === 0 ? 0 : (mx - mn) / mx * 255;  // HSV V and S
+    if (v < LINEART_V_MAX && s < LINEART_S_MAX) inkCount++; // same mask as lineart
+    lum[p] = 0.299 * r + 0.587 * g + 0.114 * b;
+  }
+  // Flatness: fraction of pixels whose right/down neighbors barely differ.
+  let flatCount = 0, tot = 0;
+  for (let y = 0; y < h - 1; y++) {
+    for (let x = 0; x < w - 1; x++) {
+      const p = y * w + x;
+      if (Math.abs(lum[p] - lum[p + 1]) + Math.abs(lum[p] - lum[p + w]) < 8) flatCount++;
+      tot++;
+    }
+  }
+  const ink = inkCount / (w * h);
+  const flat = tot ? flatCount / tot : 0;
+  return (ink >= 0.012 && flat >= 0.55) ? 'lineart' : 'threshold';
+}
+
+// Vote across all uploaded images and preselect a style (until the user
+// picks one by hand). Programmatic value set => no 'change' event fires.
+function applyStyleSuggestion() {
+  const votes = { threshold: 0, lineart: 0 };
+  for (const { img } of originals) votes[suggestStyle(img)]++;
+  const pick = votes.lineart > votes.threshold ? 'lineart' : 'threshold';
+  if (styleEl.value !== pick) styleEl.value = pick;
+  autoStyleHint = pick === 'lineart'
+    ? 'auto-picked Cartoon style (outlines detected) — change it above to override'
+    : 'auto-picked Bold style — change it above to override';
 }
 
 // ---- Core conversion (mirrors coloringify.py) ---------------------------
@@ -414,7 +496,8 @@ function rerunAll() {
     const empty = results.length === 0;
     el('downloadAll').disabled = empty;
     el('printAll').disabled = empty;
-    statusEl.textContent = `${results.length} page(s) ready. Print and color!`;
+    statusEl.textContent = `${results.length} page(s) ready. Print and color!`
+      + (autoStyleHint ? ` · ${autoStyleHint}` : '');
     window.scrollTo(0, scrollY);
   }, 20);
 }

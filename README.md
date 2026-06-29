@@ -8,6 +8,10 @@ Two ways to use it: a **website** (no install) or a **Python script** (batch a f
 Open `docs/index.html` — drag in pictures, get coloring pages, download them.
 It runs entirely in the browser (OpenCV.js); images never leave the device.
 
+On upload it inspects each image and preselects a style for you — **Cartoon**
+for art that already has black outlines (Pokémon, clip art), **Bold** for photos.
+Change the style any time; once you pick one by hand it stops auto-suggesting.
+
 Try it locally:
 
 ```bash
