@@ -55,33 +55,6 @@
   .drop .hint { color: var(--muted); font-size: 0.875rem; margin-top: 8px; }
   .drop input { display: none; }
 
-  .controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 20px 32px;
-    align-items: center;
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 18px 22px;
-    margin: 20px 0;
-  }
-  .controls label {
-    font-size: 0.8rem;
-    font-weight: 550;
-    color: var(--muted);
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .controls .row {
-    flex-direction: row;
-    align-items: center;
-    gap: 8px;
-    color: var(--ink);
-    font-size: 0.9rem;
-    font-weight: 500;
-  }
   select {
     font: inherit;
     font-size: 0.9rem;
@@ -90,12 +63,6 @@
     border: 1px solid var(--line);
     border-radius: 8px;
     background: #fff;
-  }
-  .controls label .lbl {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
   }
   .val {
     font-variant-numeric: tabular-nums;
@@ -173,6 +140,15 @@
     color: var(--muted);
   }
   .card-detail input[type="range"] { width: 110px; }
+  .card-mini {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .card-mini select { padding: 4px 6px; font-size: 0.78rem; }
   .btn {
     display: inline-block;
     background: var(--accent);
@@ -219,33 +195,6 @@
     <div class="hint">PNG, JPG, or WEBP &middot; multiple files supported</div>
   </label>
 
-  <div class="controls">
-    <label class="row">
-      <input type="checkbox" id="thumb" checked />
-      Show color guide in corner
-    </label>
-    <label>
-      <span class="lbl">Guide size <output id="thumbScaleVal" class="val">25%</output></span>
-      <input type="range" id="thumbScale" min="10" max="40" value="25" />
-    </label>
-    <label>
-      Paper size
-      <select id="paper">
-        <option value="A4">A4</option>
-        <option value="letter">Letter</option>
-      </select>
-    </label>
-    <label>
-      Print size
-      <select id="printSize">
-        <option value="100">Full page</option>
-        <option value="80">Large</option>
-        <option value="55">Medium</option>
-        <option value="35">Small</option>
-      </select>
-    </label>
-  </div>
-
   <div class="status" id="status">Loading the image engine…</div>
   <div class="actions">
     <button class="btn" id="printAll" disabled>Print all</button>
@@ -273,19 +222,12 @@ const grid = document.getElementById('grid');
 
 // ---- Controls -----------------------------------------------------------
 const el = (id) => document.getElementById(id);
-const thumbEl = el('thumb'), thumbScaleEl = el('thumbScale');
-const thumbScaleValEl = el('thumbScaleVal');
 
-// Live value readout for the guide-size slider, updated as you drag.
-const syncThumbVal = () => { thumbScaleValEl.textContent = thumbScaleEl.value + '%'; };
-thumbScaleEl.addEventListener('input', syncThumbVal);
-syncThumbVal();
-
-// Style, despeckle, and Detail are per-image (each card carries its own). The
-// controls here are global and apply to every page, so they re-run everything.
-const DEFAULT_DETAIL = 5;
-const originals = []; // { name, img, style, despeckle, detail }
-[thumbEl, thumbScaleEl].forEach((c) => c.addEventListener('change', rerunAll));
+// Every setting is per-image — each card carries its own. There are no global
+// controls; defaults below seed a freshly uploaded picture.
+const DEFAULT_DETAIL = 5, DEFAULT_THUMB_SCALE = 25;
+const originals = [];
+// { name, img, style, despeckle, detail, thumb, thumbScale, paper, printSize }
 
 // ---- File intake --------------------------------------------------------
 const drop = el('drop'), fileInput = el('file');
@@ -307,7 +249,11 @@ async function handleFiles(fileList) {
     // Per-image suggestion: pick a style from the picture itself. Lineart art
     // is noisy without speck removal, so enable despeckle when we pick it.
     const style = suggestStyle(img);
-    originals.push({ name: stem(f.name), img, style, despeckle: style === 'lineart', detail: DEFAULT_DETAIL });
+    originals.push({
+      name: stem(f.name), img, style,
+      despeckle: style === 'lineart', detail: DEFAULT_DETAIL,
+      thumb: true, thumbScale: DEFAULT_THUMB_SCALE, paper: 'A4', printSize: 100,
+    });
   }
   rerunAll();
 }
@@ -388,7 +334,8 @@ function despeckleMat(bin, minArea) {
   return out;
 }
 
-function makeColoringPage(img, style, despeckle, detail) {
+function makeColoringPage(o) {
+  const { img, style, despeckle, detail } = o;
   // Flatten any transparency onto white by drawing over a white canvas.
   const src = document.createElement('canvas');
   src.width = img.naturalWidth;
@@ -450,11 +397,11 @@ function makeColoringPage(img, style, despeckle, detail) {
   cv.imshow(outCanvas, out);
 
   // Color-reference thumbnail, top-right corner.
-  if (thumbEl.checked) {
+  if (o.thumb) {
     const ctx = outCanvas.getContext('2d');
     const W = outCanvas.width, H = outCanvas.height;
     const margin = Math.round(W * 0.015) + 6;
-    const scale = parseInt(thumbScaleEl.value, 10) / 100;
+    const scale = o.thumbScale / 100;
     let tw = Math.max(1, Math.round(W * scale));
     let th = Math.max(1, Math.round(tw * src.height / src.width));
     if (th > H - 2 * margin) { th = H - 2 * margin; tw = Math.round(th * src.width / src.height); }
@@ -482,7 +429,7 @@ function rerunAll() {
     // height until the new cards are ready (no layout collapse, no scroll jump).
     const frag = document.createDocumentFragment();
     originals.forEach((o, i) => {
-      const canvas = makeColoringPage(o.img, o.style, o.despeckle, o.detail);
+      const canvas = makeColoringPage(o);
       results.push({ name: o.name, canvas });
       frag.appendChild(makeCard(i, canvas));
     });
@@ -490,7 +437,7 @@ function rerunAll() {
     const empty = results.length === 0;
     el('downloadAll').disabled = empty;
     el('printAll').disabled = empty;
-    statusEl.textContent = `${results.length} page(s) ready. Each page has its own style below — tweak any of them.`;
+    statusEl.textContent = `${results.length} page(s) ready. Every page has its own settings below — tweak any of them.`;
     window.scrollTo(0, scrollY);
   }, 20);
 }
@@ -503,10 +450,62 @@ const STYLE_LABELS = { threshold: 'Bold', edges: 'Thin', lineart: 'Cartoon' };
 function rerenderCard(i) {
   const scrollY = window.scrollY;
   const o = originals[i];
-  const canvas = makeColoringPage(o.img, o.style, o.despeckle, o.detail);
+  const canvas = makeColoringPage(o);
   results[i] = { name: o.name, canvas };
   grid.replaceChild(makeCard(i, canvas), grid.children[i]);
   window.scrollTo(0, scrollY);
+}
+
+// A checkbox + text label. onChange(checked) fires on toggle.
+function mkCheck(text, checked, aria, onChange) {
+  const label = document.createElement('label');
+  label.className = 'card-check';
+  const box = document.createElement('input');
+  box.type = 'checkbox';
+  box.checked = checked;
+  box.setAttribute('aria-label', aria);
+  box.addEventListener('change', () => onChange(box.checked));
+  label.appendChild(box);
+  label.appendChild(document.createTextNode(' ' + text));
+  return label;
+}
+
+// A labelled range with a live value badge. onInput(value) updates state while
+// dragging; onCommit() fires on release (use it to re-render).
+function mkSlider(text, min, max, value, suffix, aria, onInput, onCommit) {
+  const row = document.createElement('label');
+  row.className = 'card-detail';
+  const span = document.createElement('span');
+  span.textContent = text;
+  const range = document.createElement('input');
+  range.type = 'range'; range.min = min; range.max = max; range.value = value;
+  range.setAttribute('aria-label', aria);
+  const val = document.createElement('output');
+  val.className = 'val';
+  val.textContent = value + suffix;
+  range.addEventListener('input', () => { val.textContent = range.value + suffix; onInput(parseInt(range.value, 10)); });
+  range.addEventListener('change', onCommit);
+  row.append(span, range, val);
+  return row;
+}
+
+// A labelled dropdown. options is [value, text] pairs. onChange(value) fires.
+function mkSelect(text, options, value, aria, onChange) {
+  const wrap = document.createElement('label');
+  wrap.className = 'card-mini';
+  const span = document.createElement('span');
+  span.textContent = text;
+  const sel = document.createElement('select');
+  for (const [v, txt] of options) {
+    const opt = document.createElement('option');
+    opt.value = v; opt.textContent = txt;
+    sel.appendChild(opt);
+  }
+  sel.value = value;
+  sel.setAttribute('aria-label', aria);
+  sel.addEventListener('change', () => onChange(sel.value));
+  wrap.append(span, sel);
+  return wrap;
 }
 
 function makeCard(i, canvas) {
@@ -515,51 +514,40 @@ function makeCard(i, canvas) {
   card.className = 'card';
   card.appendChild(canvas);
 
-  // Per-image controls: style dropdown + speck removal, preset from detection.
-  const ctrls = document.createElement('div');
-  ctrls.className = 'card-controls';
-
-  const sel = document.createElement('select');
-  for (const v of ['threshold', 'edges', 'lineart']) {
-    const opt = document.createElement('option');
-    opt.value = v; opt.textContent = STYLE_LABELS[v];
-    sel.appendChild(opt);
-  }
-  sel.value = o.style;
-  sel.setAttribute('aria-label', 'Style for ' + o.name);
-  sel.addEventListener('change', () => { o.style = sel.value; rerenderCard(i); });
-  ctrls.appendChild(sel);
-
-  const dsLabel = document.createElement('label');
-  dsLabel.className = 'card-check';
-  const ds = document.createElement('input');
-  ds.type = 'checkbox';
-  ds.checked = o.despeckle;
-  ds.setAttribute('aria-label', 'Remove specks for ' + o.name);
-  ds.addEventListener('change', () => { o.despeckle = ds.checked; rerenderCard(i); });
-  dsLabel.appendChild(ds);
-  dsLabel.appendChild(document.createTextNode(' Remove specks'));
-  ctrls.appendChild(dsLabel);
-  card.appendChild(ctrls);
+  // Row 1: style + speck removal (both change the outline -> re-render).
+  const row1 = document.createElement('div');
+  row1.className = 'card-controls';
+  row1.appendChild(mkSelect('', Object.entries(STYLE_LABELS), o.style,
+    'Style for ' + o.name, (v) => { o.style = v; rerenderCard(i); }));
+  row1.appendChild(mkCheck('Remove specks', o.despeckle, 'Remove specks for ' + o.name,
+    (c) => { o.despeckle = c; rerenderCard(i); }));
+  card.appendChild(row1);
 
   // Detail only affects the Bold (threshold) path, so show it only there.
   if (o.style === 'threshold') {
-    const row = document.createElement('label');
-    row.className = 'card-detail';
-    const span = document.createElement('span');
-    span.textContent = 'Detail';
-    const range = document.createElement('input');
-    range.type = 'range'; range.min = '1'; range.max = '20'; range.value = o.detail;
-    range.setAttribute('aria-label', 'Detail (fewer to more lines) for ' + o.name);
-    const val = document.createElement('output');
-    val.className = 'val';
-    val.textContent = o.detail;
-    // Update the readout live while dragging; re-render the page on release.
-    range.addEventListener('input', () => { o.detail = parseInt(range.value, 10); val.textContent = range.value; });
-    range.addEventListener('change', () => rerenderCard(i));
-    row.appendChild(span); row.appendChild(range); row.appendChild(val);
-    card.appendChild(row);
+    card.appendChild(mkSlider('Detail', 1, 20, o.detail, '', 'Detail (fewer to more lines) for ' + o.name,
+      (v) => { o.detail = v; }, () => rerenderCard(i)));
   }
+
+  // Row 2: color guide on/off, plus its size when on (both re-render).
+  const row2 = document.createElement('div');
+  row2.className = 'card-controls';
+  row2.appendChild(mkCheck('Color guide', o.thumb, 'Show color guide for ' + o.name,
+    (c) => { o.thumb = c; rerenderCard(i); }));
+  card.appendChild(row2);
+  if (o.thumb) {
+    card.appendChild(mkSlider('Guide size', 10, 40, o.thumbScale, '%', 'Color guide size for ' + o.name,
+      (v) => { o.thumbScale = v; }, () => rerenderCard(i)));
+  }
+
+  // Row 3: paper + print size (print-only — no canvas re-render needed).
+  const row3 = document.createElement('div');
+  row3.className = 'card-controls';
+  row3.appendChild(mkSelect('Paper', [['A4', 'A4'], ['letter', 'Letter']], o.paper,
+    'Paper size for ' + o.name, (v) => { o.paper = v; }));
+  row3.appendChild(mkSelect('Print', [['100', 'Full page'], ['80', 'Large'], ['55', 'Medium'], ['35', 'Small']],
+    String(o.printSize), 'Print size for ' + o.name, (v) => { o.printSize = parseInt(v, 10); }));
+  card.appendChild(row3);
 
   const label = document.createElement('div');
   label.className = 'name';
@@ -569,7 +557,7 @@ function makeCard(i, canvas) {
   pr.className = 'btn';
   pr.textContent = 'Print';
   pr.setAttribute('aria-label', 'Print ' + o.name);
-  pr.onclick = () => printImages([canvas.toDataURL('image/png')]);
+  pr.onclick = () => printImages([{ url: canvas.toDataURL('image/png'), paper: o.paper, printSize: o.printSize }]);
   card.appendChild(pr);
   const dl = document.createElement('button');
   dl.className = 'btn secondary';
@@ -594,14 +582,16 @@ el('downloadAll').onclick = () => {
 };
 
 // ---- Printing -----------------------------------------------------------
-// Render the chosen pages into a hidden iframe sized to the selected paper,
-// then trigger the browser's print dialog. Each page gets its own sheet.
-function printImages(dataUrls) {
-  if (!dataUrls.length) return;
-  const paper = el('paper').value;               // 'A4' | 'letter'
-  const pct = parseInt(el('printSize').value, 10); // % of the printable area
-  const pages = dataUrls.map((u) =>
-    `<div class="page"><img src="${u}"></div>`
+// Render the chosen pages into a hidden iframe, then trigger the print dialog.
+// Each page carries its own paper size and print scale, so a single job can mix
+// them: paper size is applied per sheet via named @page rules, scale inline.
+function printImages(items) {
+  if (!items.length) return;
+  const papers = [...new Set(items.map((it) => it.paper))]; // 'A4' | 'letter'
+  const pageRules = papers.map((p) => `@page p_${p} { size: ${p}; margin: 10mm; }`).join('\n');
+  const pageClasses = papers.map((p) => `.pg-${p} { page: p_${p}; }`).join('\n');
+  const pages = items.map((it) =>
+    `<div class="page pg-${it.paper}"><img style="max-width:${it.printSize}%;max-height:${it.printSize}%" src="${it.url}"></div>`
   ).join('');
 
   const returnFocus = document.activeElement;  // restore after the dialog closes
@@ -612,7 +602,7 @@ function printImages(dataUrls) {
   const doc = iframe.contentWindow.document;
   doc.open();
   doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-    @page { size: ${paper}; margin: 10mm; }
+    ${pageRules}
     html, body { margin: 0; padding: 0; }
     .page {
       height: 96vh;
@@ -623,7 +613,7 @@ function printImages(dataUrls) {
       page-break-after: always;
     }
     .page:last-child { break-after: auto; page-break-after: auto; }
-    img { max-width: ${pct}%; max-height: ${pct}%; }
+    ${pageClasses}
   </style></head><body>${pages}</body></html>`);
   doc.close();
 
@@ -646,7 +636,11 @@ function printImages(dataUrls) {
 }
 
 el('printAll').onclick = () =>
-  printImages(results.map((r) => r.canvas.toDataURL('image/png')));
+  printImages(results.map((r, i) => ({
+    url: r.canvas.toDataURL('image/png'),
+    paper: originals[i].paper,
+    printSize: originals[i].printSize,
+  })));
 </script>
 <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()"></script>
 </body>

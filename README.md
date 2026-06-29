@@ -10,9 +10,11 @@ It runs entirely in the browser (OpenCV.js); images never leave the device.
 
 On upload it inspects **each image** and preselects a per-page style — **Cartoon**
 for art that already has black outlines (Pokémon, clip art), **Bold** for photos.
-Every result card has its own style dropdown and "Remove specks" toggle, so a
-batch of mixed photos and cartoons each gets the right treatment. Tweak any card
-and only that page re-renders.
+There are no global controls: **every setting lives on the page it affects** —
+style, Remove specks, Detail (Bold pages only), color guide + size, paper size,
+and print size. So a batch of mixed photos and cartoons each gets its own
+treatment; tweak any card and only that page re-renders. "Print all" prints each
+page at its own paper and print size in a single job.
 
 Try it locally:
 
