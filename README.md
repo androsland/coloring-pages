@@ -46,13 +46,32 @@ python3 coloringify.py
 
 ```bash
 python3 coloringify.py --style edges     # thinner, sketchier lines
+python3 coloringify.py --style lineart   # for cartoons / clip art
 python3 coloringify.py --c 9             # fewer lines (less noise)
 python3 coloringify.py --c 2             # more detail
+python3 coloringify.py --despeckle       # drop tiny black specks
 python3 coloringify.py --in pics --out pages
 ```
 
 - `threshold` (default): clean, bold coloring-book lines. Best for most photos.
 - `edges`: thinner Canny outlines. Good for simple/high-contrast subjects.
+- `lineart`: keeps existing ink (dark, low-saturation pixels) and whitens the
+  colored fills. Best for images that *already* have outlines — cartoons, clip
+  art, Pokémon — where `threshold` would turn the fills into speckle. For photos,
+  stick with `threshold`.
+
+Lineart tuning (HSV scale: H 0–179, S/V 0–255):
+
+- `--v-max` (default 120): max brightness for a pixel to count as ink. Raise it
+  to keep lighter lines; lower it to keep only the darkest.
+- `--s-max` (default 60): max saturation for ink. Raise it if colored outlines
+  are being dropped; lower it to ignore more color.
+
+Despeckle (works with any style, off by default):
+
+- `--despeckle`: remove small black blobs left over after thresholding.
+- `--min-area` (default 12): smallest blob, in pixels, to keep when
+  `--despeckle` is on. Raise it to remove larger specks.
 
 Tip: if a page comes out too noisy/scribbly, raise `--c` (e.g. `--c 9`).
 If it's too sparse, lower it (`--c 3`).

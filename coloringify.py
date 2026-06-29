@@ -12,6 +12,7 @@ Usage:
 Styles:
     threshold  (default) clean "coloring-book" lines via adaptive threshold
     edges      thinner, sketchier outlines via Canny edge detection
+    lineart    keep existing ink, whiten fills — for cartoons/clip art
 """
 
 import argparse
@@ -19,6 +20,7 @@ import sys
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 # Image extensions OpenCV can reliably read.
 EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
@@ -38,6 +40,29 @@ def to_edges(gray, low: int, high: int):
     blur = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blur, low, high)
     return cv2.bitwise_not(edges)  # invert so lines are black on white
+
+
+def to_lineart(img, v_max=120, s_max=60):
+    """For images that already have outlines: keep dark, low-saturation
+    'ink' pixels; whiten everything else. Works on the BGR image, not the
+    grayscale one, because saturation is the key signal."""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    h, s, v = cv2.split(hsv)
+    ink = (v < v_max) & (s < s_max)
+    out = np.full(v.shape, 255, np.uint8)
+    out[ink] = 0
+    return out
+
+
+def despeckle(binary, min_area=12):
+    """Remove black blobs smaller than min_area px. binary: 0=ink,255=paper."""
+    ink = (binary == 0).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(ink, 8)
+    out = np.full_like(binary, 255)
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_AREA] >= min_area:
+            out[labels == i] = 0
+    return out
 
 
 def add_reference(outline, color_img, scale: float, margin: int):
@@ -88,8 +113,13 @@ def convert(path: Path, style: str, args) -> "cv2.typing.MatLike | None":
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     if style == "edges":
         outline = to_edges(gray, args.canny_low, args.canny_high)
+    elif style == "lineart":
+        outline = to_lineart(img, args.v_max, args.s_max)
     else:
         outline = to_threshold(gray, args.block_size, args.c)
+    # Despeckle the single-channel outline before add_reference promotes to BGR.
+    if args.despeckle:
+        outline = despeckle(outline, args.min_area)
     if not args.no_reference:
         outline = add_reference(outline, img, args.ref_scale, args.ref_margin)
     return outline
@@ -99,7 +129,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Turn photos into coloring pages.")
     p.add_argument("--in", dest="in_dir", default="in", help="input folder (default: in)")
     p.add_argument("--out", dest="out_dir", default="out", help="output folder (default: out)")
-    p.add_argument("--style", choices=["threshold", "edges"], default="threshold",
+    p.add_argument("--style", choices=["threshold", "edges", "lineart"], default="threshold",
                    help="line style (default: threshold)")
     # Tuning knobs (sensible defaults; expose for fiddling).
     p.add_argument("--block-size", type=int, default=9,
@@ -108,6 +138,17 @@ def main() -> int:
                    help="adaptive-threshold sensitivity; higher = fewer lines (default: 5)")
     p.add_argument("--canny-low", type=int, default=50, help="Canny low threshold (default: 50)")
     p.add_argument("--canny-high", type=int, default=150, help="Canny high threshold (default: 150)")
+    # lineart style: ink = pixels darker than v-max and less saturated than s-max.
+    # OpenCV HSV ranges are H 0-179, S/V 0-255; these defaults match that scale.
+    p.add_argument("--v-max", type=int, default=120,
+                   help="lineart: max brightness (V) for a pixel to count as ink (default: 120)")
+    p.add_argument("--s-max", type=int, default=60,
+                   help="lineart: max saturation (S) for a pixel to count as ink (default: 60)")
+    # Optional despeckle post-process (works with any style; off by default).
+    p.add_argument("--despeckle", action="store_true",
+                   help="remove tiny black specks from the outline")
+    p.add_argument("--min-area", type=int, default=12,
+                   help="smallest black blob to keep in px when --despeckle is on (default: 12)")
     # Color-reference thumbnail in the top-right corner.
     p.add_argument("--no-reference", action="store_true",
                    help="don't add the full-color reference thumbnail")

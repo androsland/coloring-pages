@@ -179,6 +179,7 @@
       <select id="style">
         <option value="threshold">Bold (coloring book)</option>
         <option value="edges">Thin (sketch)</option>
+        <option value="lineart">Cartoon / clip art (already has outlines)</option>
       </select>
     </label>
     <label>
@@ -188,6 +189,10 @@
     <label class="row">
       <input type="checkbox" id="thumb" checked />
       Show color guide in corner
+    </label>
+    <label class="row">
+      <input type="checkbox" id="despeckle" />
+      Remove specks
     </label>
     <label>
       Guide size
@@ -240,10 +245,11 @@ const grid = document.getElementById('grid');
 const el = (id) => document.getElementById(id);
 const styleEl = el('style'), sensEl = el('sensitivity');
 const thumbEl = el('thumb'), thumbScaleEl = el('thumbScale');
+const despeckleEl = el('despeckle');
 
 // Re-run everything when a setting changes (only if we have originals cached).
 const originals = []; // { name, img }
-[styleEl, sensEl, thumbEl, thumbScaleEl].forEach((c) =>
+[styleEl, sensEl, thumbEl, thumbScaleEl, despeckleEl].forEach((c) =>
   c.addEventListener('change', rerunAll)
 );
 
@@ -283,6 +289,29 @@ function loadImage(file) {
 }
 
 // ---- Core conversion (mirrors coloringify.py) ---------------------------
+// lineart ink thresholds — mirror the Python defaults (HSV: H 0-179, S/V 0-255).
+const LINEART_V_MAX = 120, LINEART_S_MAX = 60;
+const DESPECKLE_MIN_AREA = 12;
+
+// Remove black blobs smaller than minArea. `bin` is single-channel 8-bit,
+// 0=ink, 255=paper. Returns a new Mat the caller must delete. Mirrors
+// despeckle() in coloringify.py via connectedComponentsWithStats.
+function despeckleMat(bin, minArea) {
+  const inkMask = new cv.Mat();
+  cv.bitwise_not(bin, inkMask);                 // 255 where ink, 0 where paper
+  const labels = new cv.Mat(), stats = new cv.Mat(), centroids = new cv.Mat();
+  const n = cv.connectedComponentsWithStats(inkMask, labels, stats, centroids, 8, cv.CV_32S);
+  const keep = new Uint8Array(n);               // keep[0] = 0 (background stays paper)
+  for (let i = 1; i < n; i++) {
+    keep[i] = stats.intAt(i, cv.CC_STAT_AREA) >= minArea ? 1 : 0;
+  }
+  const out = new cv.Mat(bin.rows, bin.cols, cv.CV_8UC1);
+  const lab = labels.data32S, res = out.data;
+  for (let p = 0; p < lab.length; p++) res[p] = keep[lab[p]] ? 0 : 255;
+  inkMask.delete(); labels.delete(); stats.delete(); centroids.delete();
+  return out;
+}
+
 function makeColoringPage(img) {
   // Flatten any transparency onto white by drawing over a white canvas.
   const src = document.createElement('canvas');
@@ -296,7 +325,7 @@ function makeColoringPage(img) {
   const mat = cv.imread(src);                 // RGBA
   const gray = new cv.Mat();
   cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
-  const out = new cv.Mat();
+  let out = new cv.Mat();
 
   if (styleEl.value === 'edges') {
     const blur = new cv.Mat();
@@ -304,12 +333,40 @@ function makeColoringPage(img) {
     cv.Canny(blur, out, 50, 150);
     cv.bitwise_not(out, out);                 // black lines on white
     blur.delete();
+  } else if (styleEl.value === 'lineart') {
+    // Keep dark, low-saturation "ink"; whiten everything else. Saturation is
+    // the key signal, so work in HSV from RGB (not the gray image).
+    const rgb = new cv.Mat();
+    cv.cvtColor(mat, rgb, cv.COLOR_RGBA2RGB);
+    const hsv = new cv.Mat();
+    cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+    const channels = new cv.MatVector();
+    cv.split(hsv, channels);
+    const s = channels.get(1), v = channels.get(2);
+    const vMask = new cv.Mat(), sMask = new cv.Mat();
+    // THRESH_BINARY_INV sets 255 where src <= thresh; thresh-1 makes it
+    // a strict "<" to match (v < v_max) & (s < s_max) in Python.
+    cv.threshold(v, vMask, LINEART_V_MAX - 1, 255, cv.THRESH_BINARY_INV);
+    cv.threshold(s, sMask, LINEART_S_MAX - 1, 255, cv.THRESH_BINARY_INV);
+    const ink = new cv.Mat();
+    cv.bitwise_and(vMask, sMask, ink);        // 255 where ink
+    cv.bitwise_not(ink, out);                 // black ink on white paper
+    rgb.delete(); hsv.delete(); s.delete(); v.delete(); channels.delete();
+    vMask.delete(); sMask.delete(); ink.delete();
   } else {
     const blur = new cv.Mat();
     cv.medianBlur(gray, blur, 5);
     const C = parseInt(sensEl.value, 10);     // higher = fewer lines
     cv.adaptiveThreshold(blur, out, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY, 9, C);
     blur.delete();
+  }
+
+  // Optional speck removal on the single-channel outline, before the color
+  // guide (which paints onto a BGR promotion of this Mat).
+  if (despeckleEl.checked) {
+    const cleaned = despeckleMat(out, DESPECKLE_MIN_AREA);
+    out.delete();
+    out = cleaned;
   }
 
   // Render the outline to an output canvas.
