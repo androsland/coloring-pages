@@ -396,20 +396,26 @@ function makeColoringPage(img) {
 // ---- Render -------------------------------------------------------------
 function rerunAll() {
   if (!cvReady || !originals.length) return;
-  grid.innerHTML = '';
+  // Remember scroll position: rebuilding the grid must not yank the page to top.
+  const scrollY = window.scrollY;
   results.length = 0;
   statusEl.textContent = 'Drawing…';
   // Defer so the status paints before the (synchronous) heavy work.
   setTimeout(() => {
+    // Build into a fragment and swap in one shot, so the old grid keeps its
+    // height until the new cards are ready (no layout collapse, no scroll jump).
+    const frag = document.createDocumentFragment();
     for (const { name, img } of originals) {
       const canvas = makeColoringPage(img);
       results.push({ name, canvas });
-      grid.appendChild(makeCard(name, canvas));
+      frag.appendChild(makeCard(name, canvas));
     }
+    grid.replaceChildren(frag);
     const empty = results.length === 0;
     el('downloadAll').disabled = empty;
     el('printAll').disabled = empty;
     statusEl.textContent = `${results.length} page(s) ready. Print and color!`;
+    window.scrollTo(0, scrollY);
   }, 20);
 }
 
