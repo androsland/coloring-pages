@@ -162,6 +162,17 @@
     color: var(--muted);
     cursor: pointer;
   }
+  .card-detail {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin: 2px 0;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .card-detail input[type="range"] { width: 110px; }
   .btn {
     display: inline-block;
     background: var(--accent);
@@ -209,10 +220,6 @@
   </label>
 
   <div class="controls">
-    <label>
-      <span class="lbl">Detail (fewer to more lines) <output id="sensitivityVal" class="val">5</output></span>
-      <input type="range" id="sensitivity" min="1" max="20" value="5" />
-    </label>
     <label class="row">
       <input type="checkbox" id="thumb" checked />
       Show color guide in corner
@@ -266,23 +273,19 @@ const grid = document.getElementById('grid');
 
 // ---- Controls -----------------------------------------------------------
 const el = (id) => document.getElementById(id);
-const sensEl = el('sensitivity');
 const thumbEl = el('thumb'), thumbScaleEl = el('thumbScale');
-const sensValEl = el('sensitivityVal'), thumbScaleValEl = el('thumbScaleVal');
+const thumbScaleValEl = el('thumbScaleVal');
 
-// Live value readouts for the range sliders, updated as you drag.
-const syncSensVal = () => { sensValEl.textContent = sensEl.value; };
+// Live value readout for the guide-size slider, updated as you drag.
 const syncThumbVal = () => { thumbScaleValEl.textContent = thumbScaleEl.value + '%'; };
-sensEl.addEventListener('input', syncSensVal);
 thumbScaleEl.addEventListener('input', syncThumbVal);
-syncSensVal(); syncThumbVal();
+syncThumbVal();
 
-// Style and despeckle are per-image (each card carries its own). The remaining
+// Style, despeckle, and Detail are per-image (each card carries its own). The
 // controls here are global and apply to every page, so they re-run everything.
-const originals = []; // { name, img, style, despeckle }
-[sensEl, thumbEl, thumbScaleEl].forEach((c) =>
-  c.addEventListener('change', rerunAll)
-);
+const DEFAULT_DETAIL = 5;
+const originals = []; // { name, img, style, despeckle, detail }
+[thumbEl, thumbScaleEl].forEach((c) => c.addEventListener('change', rerunAll));
 
 // ---- File intake --------------------------------------------------------
 const drop = el('drop'), fileInput = el('file');
@@ -304,7 +307,7 @@ async function handleFiles(fileList) {
     // Per-image suggestion: pick a style from the picture itself. Lineart art
     // is noisy without speck removal, so enable despeckle when we pick it.
     const style = suggestStyle(img);
-    originals.push({ name: stem(f.name), img, style, despeckle: style === 'lineart' });
+    originals.push({ name: stem(f.name), img, style, despeckle: style === 'lineart', detail: DEFAULT_DETAIL });
   }
   rerunAll();
 }
@@ -385,7 +388,7 @@ function despeckleMat(bin, minArea) {
   return out;
 }
 
-function makeColoringPage(img, style, despeckle) {
+function makeColoringPage(img, style, despeckle, detail) {
   // Flatten any transparency onto white by drawing over a white canvas.
   const src = document.createElement('canvas');
   src.width = img.naturalWidth;
@@ -429,7 +432,7 @@ function makeColoringPage(img, style, despeckle) {
   } else {
     const blur = new cv.Mat();
     cv.medianBlur(gray, blur, 5);
-    const C = parseInt(sensEl.value, 10);     // higher = fewer lines
+    const C = detail;                         // higher = fewer lines
     cv.adaptiveThreshold(blur, out, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY, 9, C);
     blur.delete();
   }
@@ -479,7 +482,7 @@ function rerunAll() {
     // height until the new cards are ready (no layout collapse, no scroll jump).
     const frag = document.createDocumentFragment();
     originals.forEach((o, i) => {
-      const canvas = makeColoringPage(o.img, o.style, o.despeckle);
+      const canvas = makeColoringPage(o.img, o.style, o.despeckle, o.detail);
       results.push({ name: o.name, canvas });
       frag.appendChild(makeCard(i, canvas));
     });
@@ -500,7 +503,7 @@ const STYLE_LABELS = { threshold: 'Bold', edges: 'Thin', lineart: 'Cartoon' };
 function rerenderCard(i) {
   const scrollY = window.scrollY;
   const o = originals[i];
-  const canvas = makeColoringPage(o.img, o.style, o.despeckle);
+  const canvas = makeColoringPage(o.img, o.style, o.despeckle, o.detail);
   results[i] = { name: o.name, canvas };
   grid.replaceChild(makeCard(i, canvas), grid.children[i]);
   window.scrollTo(0, scrollY);
@@ -538,6 +541,25 @@ function makeCard(i, canvas) {
   dsLabel.appendChild(document.createTextNode(' Remove specks'));
   ctrls.appendChild(dsLabel);
   card.appendChild(ctrls);
+
+  // Detail only affects the Bold (threshold) path, so show it only there.
+  if (o.style === 'threshold') {
+    const row = document.createElement('label');
+    row.className = 'card-detail';
+    const span = document.createElement('span');
+    span.textContent = 'Detail';
+    const range = document.createElement('input');
+    range.type = 'range'; range.min = '1'; range.max = '20'; range.value = o.detail;
+    range.setAttribute('aria-label', 'Detail (fewer to more lines) for ' + o.name);
+    const val = document.createElement('output');
+    val.className = 'val';
+    val.textContent = o.detail;
+    // Update the readout live while dragging; re-render the page on release.
+    range.addEventListener('input', () => { o.detail = parseInt(range.value, 10); val.textContent = range.value; });
+    range.addEventListener('change', () => rerenderCard(i));
+    row.appendChild(span); row.appendChild(range); row.appendChild(val);
+    card.appendChild(row);
+  }
 
   const label = document.createElement('div');
   label.className = 'name';
