@@ -8,9 +8,11 @@ Two ways to use it: a **website** (no install) or a **Python script** (batch a f
 Open `docs/index.html` — drag in pictures, get coloring pages, download them.
 It runs entirely in the browser (OpenCV.js); images never leave the device.
 
-On upload it inspects each image and preselects a style for you — **Cartoon**
+On upload it inspects **each image** and preselects a per-page style — **Cartoon**
 for art that already has black outlines (Pokémon, clip art), **Bold** for photos.
-Change the style any time; once you pick one by hand it stops auto-suggesting.
+Every result card has its own style dropdown and "Remove specks" toggle, so a
+batch of mixed photos and cartoons each gets the right treatment. Tweak any card
+and only that page re-renders.
 
 Try it locally:
 

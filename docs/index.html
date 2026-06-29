@@ -144,6 +144,24 @@
     margin: 10px 0;
     word-break: break-all;
   }
+  .card-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin: 10px 0 2px;
+  }
+  .card-controls select { padding: 5px 8px; font-size: 0.8rem; }
+  .card-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+  }
   .btn {
     display: inline-block;
     background: var(--accent);
@@ -192,24 +210,12 @@
 
   <div class="controls">
     <label>
-      Line style
-      <select id="style">
-        <option value="threshold">Bold (coloring book)</option>
-        <option value="edges">Thin (sketch)</option>
-        <option value="lineart">Cartoon / clip art (already has outlines)</option>
-      </select>
-    </label>
-    <label>
       <span class="lbl">Detail (fewer to more lines) <output id="sensitivityVal" class="val">5</output></span>
       <input type="range" id="sensitivity" min="1" max="20" value="5" />
     </label>
     <label class="row">
       <input type="checkbox" id="thumb" checked />
       Show color guide in corner
-    </label>
-    <label class="row">
-      <input type="checkbox" id="despeckle" />
-      Remove specks
     </label>
     <label>
       <span class="lbl">Guide size <output id="thumbScaleVal" class="val">25%</output></span>
@@ -260,9 +266,8 @@ const grid = document.getElementById('grid');
 
 // ---- Controls -----------------------------------------------------------
 const el = (id) => document.getElementById(id);
-const styleEl = el('style'), sensEl = el('sensitivity');
+const sensEl = el('sensitivity');
 const thumbEl = el('thumb'), thumbScaleEl = el('thumbScale');
-const despeckleEl = el('despeckle');
 const sensValEl = el('sensitivityVal'), thumbScaleValEl = el('thumbScaleVal');
 
 // Live value readouts for the range sliders, updated as you drag.
@@ -272,14 +277,10 @@ sensEl.addEventListener('input', syncSensVal);
 thumbScaleEl.addEventListener('input', syncThumbVal);
 syncSensVal(); syncThumbVal();
 
-// Once the user picks a style by hand, stop auto-suggesting one on upload.
-let userPickedStyle = false;
-let autoStyleHint = '';
-styleEl.addEventListener('change', () => { userPickedStyle = true; autoStyleHint = ''; });
-
-// Re-run everything when a setting changes (only if we have originals cached).
-const originals = []; // { name, img }
-[styleEl, sensEl, thumbEl, thumbScaleEl, despeckleEl].forEach((c) =>
+// Style and despeckle are per-image (each card carries its own). The remaining
+// controls here are global and apply to every page, so they re-run everything.
+const originals = []; // { name, img, style, despeckle }
+[sensEl, thumbEl, thumbScaleEl].forEach((c) =>
   c.addEventListener('change', rerunAll)
 );
 
@@ -300,9 +301,11 @@ async function handleFiles(fileList) {
   if (!files.length) return;
   for (const f of files) {
     const img = await loadImage(f);
-    originals.push({ name: stem(f.name), img });
+    // Per-image suggestion: pick a style from the picture itself. Lineart art
+    // is noisy without speck removal, so enable despeckle when we pick it.
+    const style = suggestStyle(img);
+    originals.push({ name: stem(f.name), img, style, despeckle: style === 'lineart' });
   }
-  if (!userPickedStyle) applyStyleSuggestion();
   rerunAll();
 }
 
@@ -358,18 +361,6 @@ function suggestStyle(img) {
   return (ink >= 0.012 && flat >= 0.55) ? 'lineart' : 'threshold';
 }
 
-// Vote across all uploaded images and preselect a style (until the user
-// picks one by hand). Programmatic value set => no 'change' event fires.
-function applyStyleSuggestion() {
-  const votes = { threshold: 0, lineart: 0 };
-  for (const { img } of originals) votes[suggestStyle(img)]++;
-  const pick = votes.lineart > votes.threshold ? 'lineart' : 'threshold';
-  if (styleEl.value !== pick) styleEl.value = pick;
-  autoStyleHint = pick === 'lineart'
-    ? 'auto-picked Cartoon style (outlines detected) — change it above to override'
-    : 'auto-picked Bold style — change it above to override';
-}
-
 // ---- Core conversion (mirrors coloringify.py) ---------------------------
 // lineart ink thresholds — mirror the Python defaults (HSV: H 0-179, S/V 0-255).
 const LINEART_V_MAX = 120, LINEART_S_MAX = 60;
@@ -394,7 +385,7 @@ function despeckleMat(bin, minArea) {
   return out;
 }
 
-function makeColoringPage(img) {
+function makeColoringPage(img, style, despeckle) {
   // Flatten any transparency onto white by drawing over a white canvas.
   const src = document.createElement('canvas');
   src.width = img.naturalWidth;
@@ -409,13 +400,13 @@ function makeColoringPage(img) {
   cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
   let out = new cv.Mat();
 
-  if (styleEl.value === 'edges') {
+  if (style === 'edges') {
     const blur = new cv.Mat();
     cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
     cv.Canny(blur, out, 50, 150);
     cv.bitwise_not(out, out);                 // black lines on white
     blur.delete();
-  } else if (styleEl.value === 'lineart') {
+  } else if (style === 'lineart') {
     // Keep dark, low-saturation "ink"; whiten everything else. Saturation is
     // the key signal, so work in HSV from RGB (not the gray image).
     const rgb = new cv.Mat();
@@ -445,7 +436,7 @@ function makeColoringPage(img) {
 
   // Optional speck removal on the single-channel outline, before the color
   // guide (which paints onto a BGR promotion of this Mat).
-  if (despeckleEl.checked) {
+  if (despeckle) {
     const cleaned = despeckleMat(out, DESPECKLE_MIN_AREA);
     out.delete();
     out = cleaned;
@@ -487,39 +478,81 @@ function rerunAll() {
     // Build into a fragment and swap in one shot, so the old grid keeps its
     // height until the new cards are ready (no layout collapse, no scroll jump).
     const frag = document.createDocumentFragment();
-    for (const { name, img } of originals) {
-      const canvas = makeColoringPage(img);
-      results.push({ name, canvas });
-      frag.appendChild(makeCard(name, canvas));
-    }
+    originals.forEach((o, i) => {
+      const canvas = makeColoringPage(o.img, o.style, o.despeckle);
+      results.push({ name: o.name, canvas });
+      frag.appendChild(makeCard(i, canvas));
+    });
     grid.replaceChildren(frag);
     const empty = results.length === 0;
     el('downloadAll').disabled = empty;
     el('printAll').disabled = empty;
-    statusEl.textContent = `${results.length} page(s) ready. Print and color!`
-      + (autoStyleHint ? ` · ${autoStyleHint}` : '');
+    statusEl.textContent = `${results.length} page(s) ready. Each page has its own style below — tweak any of them.`;
     window.scrollTo(0, scrollY);
   }, 20);
 }
 
-function makeCard(name, canvas) {
+// Friendly labels for the per-card style dropdown.
+const STYLE_LABELS = { threshold: 'Bold', edges: 'Thin', lineart: 'Cartoon' };
+
+// Re-render a single card in place when its style/despeckle changes — keeps the
+// other cards (and the scroll position) untouched.
+function rerenderCard(i) {
+  const scrollY = window.scrollY;
+  const o = originals[i];
+  const canvas = makeColoringPage(o.img, o.style, o.despeckle);
+  results[i] = { name: o.name, canvas };
+  grid.replaceChild(makeCard(i, canvas), grid.children[i]);
+  window.scrollTo(0, scrollY);
+}
+
+function makeCard(i, canvas) {
+  const o = originals[i];
   const card = document.createElement('div');
   card.className = 'card';
   card.appendChild(canvas);
+
+  // Per-image controls: style dropdown + speck removal, preset from detection.
+  const ctrls = document.createElement('div');
+  ctrls.className = 'card-controls';
+
+  const sel = document.createElement('select');
+  for (const v of ['threshold', 'edges', 'lineart']) {
+    const opt = document.createElement('option');
+    opt.value = v; opt.textContent = STYLE_LABELS[v];
+    sel.appendChild(opt);
+  }
+  sel.value = o.style;
+  sel.setAttribute('aria-label', 'Style for ' + o.name);
+  sel.addEventListener('change', () => { o.style = sel.value; rerenderCard(i); });
+  ctrls.appendChild(sel);
+
+  const dsLabel = document.createElement('label');
+  dsLabel.className = 'card-check';
+  const ds = document.createElement('input');
+  ds.type = 'checkbox';
+  ds.checked = o.despeckle;
+  ds.setAttribute('aria-label', 'Remove specks for ' + o.name);
+  ds.addEventListener('change', () => { o.despeckle = ds.checked; rerenderCard(i); });
+  dsLabel.appendChild(ds);
+  dsLabel.appendChild(document.createTextNode(' Remove specks'));
+  ctrls.appendChild(dsLabel);
+  card.appendChild(ctrls);
+
   const label = document.createElement('div');
   label.className = 'name';
-  label.textContent = name + '.png';
+  label.textContent = o.name + '.png';
   card.appendChild(label);
   const pr = document.createElement('button');
   pr.className = 'btn';
   pr.textContent = 'Print';
-  pr.setAttribute('aria-label', 'Print ' + name);
+  pr.setAttribute('aria-label', 'Print ' + o.name);
   pr.onclick = () => printImages([canvas.toDataURL('image/png')]);
   card.appendChild(pr);
   const dl = document.createElement('button');
   dl.className = 'btn secondary';
   dl.textContent = 'Download';
-  dl.onclick = () => downloadCanvas(canvas, name);
+  dl.onclick = () => downloadCanvas(canvas, o.name);
   card.appendChild(dl);
   return card;
 }
