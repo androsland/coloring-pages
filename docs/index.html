@@ -276,6 +276,7 @@ const el = (id) => document.getElementById(id);
 // Every setting is per-image — each card carries its own. There are no global
 // controls; defaults below seed a freshly uploaded picture.
 const DEFAULT_DETAIL = 5, DEFAULT_THUMB_SCALE = 25;
+let pendingNote = '';   // one-shot status suffix (e.g. "skipped 2 files")
 const originals = [];
 // { name, img, style, despeckle, detail, thumb, thumbScale }
 
@@ -292,10 +293,23 @@ drop.addEventListener('drop', (e) => handleFiles(e.dataTransfer.files));
 
 async function handleFiles(fileList) {
   if (!cvReady) { statusEl.textContent = 'Still loading the engine — try again in a moment.'; return; }
-  const files = [...fileList].filter((f) => f.type.startsWith('image/'));
-  if (!files.length) return;
-  for (const f of files) {
-    const img = await loadImage(f);
+  const all = [...fileList];
+  const imageFiles = all.filter((f) => f.type.startsWith('image/'));
+  let skipped = all.length - imageFiles.length;   // non-image files dropped
+  if (!imageFiles.length) {
+    statusEl.textContent = all.length
+      ? "Those aren't images I can read — try PNG, JPG, or WEBP."
+      : '';
+    return;
+  }
+  statusEl.textContent = 'Reading images…';
+  let added = 0;
+  for (const f of imageFiles) {
+    // Isolate each file: a corrupt or unsupported image must not abort the batch.
+    let img;
+    try { img = await loadImage(f); }
+    catch { skipped++; continue; }
+    if (!img.naturalWidth || !img.naturalHeight) { skipped++; continue; }
     // Per-image suggestion: pick a style from the picture itself. Lineart art
     // is noisy without speck removal, so enable despeckle when we pick it.
     const style = suggestStyle(img);
@@ -304,7 +318,13 @@ async function handleFiles(fileList) {
       despeckle: style === 'lineart', detail: DEFAULT_DETAIL,
       thumb: true, thumbScale: DEFAULT_THUMB_SCALE,
     });
+    added++;
   }
+  if (!added) {
+    statusEl.textContent = "Couldn't read those images — they may be corrupt or an unsupported format.";
+    return;
+  }
+  pendingNote = skipped ? `skipped ${skipped} file${skipped > 1 ? 's' : ''} (couldn't read)` : '';
   rerunAll();
 }
 
@@ -315,9 +335,10 @@ function stem(filename) {
 function loadImage(file) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = URL.createObjectURL(file);
+    const url = URL.createObjectURL(file);
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };       // decoded; URL no longer needed
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode failed')); };
+    img.src = url;
   });
 }
 
@@ -487,7 +508,9 @@ function rerunAll() {
     const empty = results.length === 0;
     el('downloadAll').disabled = empty;
     el('printAll').disabled = empty;
-    statusEl.textContent = `${results.length} page(s) ready. Every page has its own settings below — tweak any of them.`;
+    statusEl.textContent = `${results.length} page(s) ready. Every page has its own settings below — tweak any of them.`
+      + (pendingNote ? ` · ${pendingNote}` : '');
+    pendingNote = '';
     window.scrollTo(0, scrollY);
   }, 20);
 }
