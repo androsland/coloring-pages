@@ -310,12 +310,11 @@ async function handleFiles(fileList) {
     try { img = await loadImage(f); }
     catch { skipped++; continue; }
     if (!img.naturalWidth || !img.naturalHeight) { skipped++; continue; }
-    // Per-image suggestion: pick a style from the picture itself. Lineart art
-    // is noisy without speck removal, so enable despeckle when we pick it.
-    const style = suggestStyle(img);
+    // Default to Bold (threshold): robust across photos and cartoons alike. The
+    // per-card dropdown switches to Cartoon/Thin when you want a different look.
     originals.push({
-      name: stem(f.name), img, style,
-      despeckle: style === 'lineart', detail: DEFAULT_DETAIL,
+      name: stem(f.name), img, style: 'threshold',
+      despeckle: false, detail: DEFAULT_DETAIL,
       thumb: true, thumbScale: DEFAULT_THUMB_SCALE,
     });
     added++;
@@ -340,45 +339,6 @@ function loadImage(file) {
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode failed')); };
     img.src = url;
   });
-}
-
-// ---- Style suggestion ---------------------------------------------------
-// Guess a good default from the image itself. If it already has black ink
-// outlines (lots of dark, low-saturation pixels) over large flat regions,
-// it's cartoon/clip art -> "lineart". Otherwise (photos, colored-outline art)
-// -> "threshold". Cheap pure-JS pass on a downscaled copy; no OpenCV Mats.
-function suggestStyle(img) {
-  const MAX = 480;
-  const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
-  const w = Math.max(1, Math.round(img.naturalWidth * scale));
-  const h = Math.max(1, Math.round(img.naturalHeight * scale));
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  const ctx = c.getContext('2d');
-  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, w, h);   // flatten transparency
-  ctx.drawImage(img, 0, 0, w, h);
-  const d = ctx.getImageData(0, 0, w, h).data;
-  const lum = new Float32Array(w * h);
-  let inkCount = 0;
-  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
-    const r = d[i], g = d[i + 1], b = d[i + 2];
-    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-    const v = mx, s = mx === 0 ? 0 : (mx - mn) / mx * 255;  // HSV V and S
-    if (v < LINEART_V_MAX && s < LINEART_S_MAX) inkCount++; // same mask as lineart
-    lum[p] = 0.299 * r + 0.587 * g + 0.114 * b;
-  }
-  // Flatness: fraction of pixels whose right/down neighbors barely differ.
-  let flatCount = 0, tot = 0;
-  for (let y = 0; y < h - 1; y++) {
-    for (let x = 0; x < w - 1; x++) {
-      const p = y * w + x;
-      if (Math.abs(lum[p] - lum[p + 1]) + Math.abs(lum[p] - lum[p + w]) < 8) flatCount++;
-      tot++;
-    }
-  }
-  const ink = inkCount / (w * h);
-  const flat = tot ? flatCount / tot : 0;
-  return (ink >= 0.012 && flat >= 0.55) ? 'lineart' : 'threshold';
 }
 
 // ---- Core conversion (mirrors coloringify.py) ---------------------------
