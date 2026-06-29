@@ -104,6 +104,47 @@
     border-radius: 8px;
     background: #fff;
     border: 1px solid var(--line);
+    cursor: zoom-in;
+  }
+  .card canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* Actual-size viewer */
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    background: rgba(15, 23, 42, 0.88);
+    overflow: auto;
+    padding: 56px 24px 24px;
+  }
+  .lightbox[hidden] { display: none; }
+  .lightbox-bar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    background: rgba(15, 23, 42, 0.6);
+    color: #fff;
+  }
+  .lightbox-caption { font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+  .lightbox-close {
+    background: none;
+    border: none;
+    color: #fff;
+    font-size: 1.8rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 6px;
+  }
+  .lightbox-stage { display: flex; min-height: 100%; }
+  .lightbox-stage img {
+    margin: auto;            /* center when smaller than the viewport */
+    background: #fff;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+    cursor: zoom-out;
   }
   .card .name {
     font-size: 0.8rem;
@@ -205,6 +246,15 @@
 
 <footer>Runs entirely in your browser. Your images never leave your device.</footer>
 
+<!-- Actual-size viewer: click any page to inspect it at full resolution. -->
+<div class="lightbox" id="lightbox" hidden role="dialog" aria-modal="true" aria-label="Page at actual size">
+  <div class="lightbox-bar">
+    <span class="lightbox-caption" id="lightboxCaption"></span>
+    <button class="lightbox-close" id="lightboxClose" aria-label="Close viewer">&times;</button>
+  </div>
+  <div class="lightbox-stage" id="lightboxStage"></div>
+</div>
+
 <script>
 // ---- OpenCV.js readiness ------------------------------------------------
 let cvReady = false;
@@ -227,7 +277,7 @@ const el = (id) => document.getElementById(id);
 // controls; defaults below seed a freshly uploaded picture.
 const DEFAULT_DETAIL = 5, DEFAULT_THUMB_SCALE = 25;
 const originals = [];
-// { name, img, style, despeckle, detail, thumb, thumbScale, paper, printSize }
+// { name, img, style, despeckle, detail, thumb, thumbScale }
 
 // ---- File intake --------------------------------------------------------
 const drop = el('drop'), fileInput = el('file');
@@ -252,7 +302,7 @@ async function handleFiles(fileList) {
     originals.push({
       name: stem(f.name), img, style,
       despeckle: style === 'lineart', detail: DEFAULT_DETAIL,
-      thumb: true, thumbScale: DEFAULT_THUMB_SCALE, paper: 'A4', printSize: 100,
+      thumb: true, thumbScale: DEFAULT_THUMB_SCALE,
     });
   }
   rerunAll();
@@ -512,6 +562,15 @@ function makeCard(i, canvas) {
   const o = originals[i];
   const card = document.createElement('div');
   card.className = 'card';
+  // The on-card canvas is scaled to fit; clicking opens it at actual size.
+  canvas.setAttribute('role', 'button');
+  canvas.setAttribute('tabindex', '0');
+  canvas.setAttribute('aria-label', 'View ' + o.name + ' at actual size');
+  canvas.title = 'Click to view actual size';
+  canvas.addEventListener('click', () => openLightbox(canvas, o.name));
+  canvas.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openLightbox(canvas, o.name); }
+  });
   card.appendChild(canvas);
 
   // Row 1: style + speck removal (both change the outline -> re-render).
@@ -540,15 +599,6 @@ function makeCard(i, canvas) {
       (v) => { o.thumbScale = v; }, () => rerenderCard(i)));
   }
 
-  // Row 3: paper + print size (print-only — no canvas re-render needed).
-  const row3 = document.createElement('div');
-  row3.className = 'card-controls';
-  row3.appendChild(mkSelect('Paper', [['A4', 'A4'], ['letter', 'Letter']], o.paper,
-    'Paper size for ' + o.name, (v) => { o.paper = v; }));
-  row3.appendChild(mkSelect('Print', [['100', 'Full page'], ['80', 'Large'], ['55', 'Medium'], ['35', 'Small']],
-    String(o.printSize), 'Print size for ' + o.name, (v) => { o.printSize = parseInt(v, 10); }));
-  card.appendChild(row3);
-
   const label = document.createElement('div');
   label.className = 'name';
   label.textContent = o.name + '.png';
@@ -557,7 +607,7 @@ function makeCard(i, canvas) {
   pr.className = 'btn';
   pr.textContent = 'Print';
   pr.setAttribute('aria-label', 'Print ' + o.name);
-  pr.onclick = () => printImages([{ url: canvas.toDataURL('image/png'), paper: o.paper, printSize: o.printSize }]);
+  pr.onclick = () => printImages([canvas.toDataURL('image/png')]);
   card.appendChild(pr);
   const dl = document.createElement('button');
   dl.className = 'btn secondary';
@@ -581,18 +631,40 @@ el('downloadAll').onclick = () => {
   results.forEach((r, i) => setTimeout(() => downloadCanvas(r.canvas, r.name), i * 250));
 };
 
+// ---- Actual-size viewer -------------------------------------------------
+// Click a page to see it at 1:1 pixels (the on-card preview is scaled down, so
+// this is where you check fine line detail). Dismiss via the image, backdrop,
+// the close button, or Escape.
+const lightbox = el('lightbox'), lightboxStage = el('lightboxStage'), lightboxCaption = el('lightboxCaption');
+let lightboxReturnFocus = null;
+
+function openLightbox(canvas, name) {
+  const img = new Image();
+  img.src = canvas.toDataURL('image/png');
+  img.alt = name + ' at actual size';
+  img.addEventListener('click', closeLightbox);
+  lightboxStage.replaceChildren(img);
+  lightboxCaption.textContent = `${name}.png · ${canvas.width} × ${canvas.height} px`;
+  lightboxReturnFocus = document.activeElement;
+  lightbox.hidden = false;
+  el('lightboxClose').focus();
+}
+function closeLightbox() {
+  if (lightbox.hidden) return;
+  lightbox.hidden = true;
+  lightboxStage.replaceChildren();
+  if (lightboxReturnFocus && lightboxReturnFocus.focus) lightboxReturnFocus.focus();
+}
+el('lightboxClose').addEventListener('click', closeLightbox);
+lightbox.addEventListener('click', (e) => { if (e.target === lightbox) closeLightbox(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
+
 // ---- Printing -----------------------------------------------------------
-// Render the chosen pages into a hidden iframe, then trigger the print dialog.
-// Each page carries its own paper size and print scale, so a single job can mix
-// them: paper size is applied per sheet via named @page rules, scale inline.
-function printImages(items) {
-  if (!items.length) return;
-  const papers = [...new Set(items.map((it) => it.paper))]; // 'A4' | 'letter'
-  const pageRules = papers.map((p) => `@page p_${p} { size: ${p}; margin: 10mm; }`).join('\n');
-  const pageClasses = papers.map((p) => `.pg-${p} { page: p_${p}; }`).join('\n');
-  const pages = items.map((it) =>
-    `<div class="page pg-${it.paper}"><img style="max-width:${it.printSize}%;max-height:${it.printSize}%" src="${it.url}"></div>`
-  ).join('');
+// Render the chosen pages into a hidden iframe, one per sheet, then trigger the
+// print dialog. Paper size and scaling are left to the browser's print preview.
+function printImages(dataUrls) {
+  if (!dataUrls.length) return;
+  const pages = dataUrls.map((u) => `<div class="page"><img src="${u}"></div>`).join('');
 
   const returnFocus = document.activeElement;  // restore after the dialog closes
   const iframe = document.createElement('iframe');
@@ -602,7 +674,7 @@ function printImages(items) {
   const doc = iframe.contentWindow.document;
   doc.open();
   doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-    ${pageRules}
+    @page { margin: 10mm; }
     html, body { margin: 0; padding: 0; }
     .page {
       height: 96vh;
@@ -613,7 +685,7 @@ function printImages(items) {
       page-break-after: always;
     }
     .page:last-child { break-after: auto; page-break-after: auto; }
-    ${pageClasses}
+    img { max-width: 100%; max-height: 100%; }
   </style></head><body>${pages}</body></html>`);
   doc.close();
 
@@ -636,11 +708,7 @@ function printImages(items) {
 }
 
 el('printAll').onclick = () =>
-  printImages(results.map((r, i) => ({
-    url: r.canvas.toDataURL('image/png'),
-    paper: originals[i].paper,
-    printSize: originals[i].printSize,
-  })));
+  printImages(results.map((r) => r.canvas.toDataURL('image/png')));
 </script>
 <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady()"></script>
 </body>
