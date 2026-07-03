@@ -315,7 +315,7 @@ async function handleFiles(fileList) {
     originals.push({
       name: stem(f.name), img, style: 'threshold',
       despeckle: false, detail: DEFAULT_DETAIL,
-      thumb: true, thumbScale: DEFAULT_THUMB_SCALE,
+      thumb: true, thumbScale: DEFAULT_THUMB_SCALE, thumbAbove: false,
     });
     added++;
   }
@@ -427,19 +427,41 @@ function makeColoringPage(o) {
   const outCanvas = document.createElement('canvas');
   cv.imshow(outCanvas, out);
 
-  // Color-reference thumbnail, top-right corner.
+  // Color-reference thumbnail: either overlaid in the top-right corner, or in
+  // its own white band above the outline so it never covers the drawing.
   if (o.thumb) {
-    const ctx = outCanvas.getContext('2d');
     const W = outCanvas.width, H = outCanvas.height;
-    const margin = Math.round(W * 0.015) + 6;
     const scale = o.thumbScale / 100;
+    const stroke = Math.max(2, Math.round(W * 0.003));
+    if (o.thumbAbove) {
+      const pad = Math.round(W * 0.015) + 6;
+      let tw = Math.max(1, Math.round(W * scale));
+      let th = Math.max(1, Math.round(tw * src.height / src.width));
+      const band = th + 2 * pad;
+      const final = document.createElement('canvas');
+      final.width = W;
+      final.height = H + band;
+      const fctx = final.getContext('2d');
+      fctx.fillStyle = '#ffffff';
+      fctx.fillRect(0, 0, final.width, final.height);
+      const x = Math.round((W - tw) / 2), y = pad;
+      fctx.drawImage(src, x, y, tw, th);
+      fctx.strokeStyle = '#000';
+      fctx.lineWidth = stroke;
+      fctx.strokeRect(x, y, tw, th);
+      fctx.drawImage(outCanvas, 0, band);
+      mat.delete(); gray.delete(); out.delete();
+      return final;
+    }
+    const ctx = outCanvas.getContext('2d');
+    const margin = Math.round(W * 0.015) + 6;
     let tw = Math.max(1, Math.round(W * scale));
     let th = Math.max(1, Math.round(tw * src.height / src.width));
     if (th > H - 2 * margin) { th = H - 2 * margin; tw = Math.round(th * src.width / src.height); }
     const x = W - margin - tw, y = margin;
     ctx.drawImage(src, x, y, tw, th);
     ctx.strokeStyle = '#000';
-    ctx.lineWidth = Math.max(2, Math.round(W * 0.003));
+    ctx.lineWidth = stroke;
     ctx.strokeRect(x, y, tw, th);
   }
 
@@ -482,10 +504,23 @@ const STYLE_LABELS = { threshold: 'Bold', edges: 'Thin', lineart: 'Cartoon' };
 // other cards (and the scroll position) untouched.
 function rerenderCard(i) {
   const scrollY = window.scrollY;
+  const oldCard = grid.children[i];
+  // If a control in this card had focus (e.g. a slider being nudged with the
+  // arrow keys), remember it by aria-label so we can restore focus after the
+  // rebuild — otherwise every keypress fires 'change', rebuilds the card, and
+  // drops focus, making keyboard editing impossible.
+  const active = document.activeElement;
+  const focusKey = active && oldCard.contains(active) ? active.getAttribute('aria-label') : null;
   const o = originals[i];
   const canvas = makeColoringPage(o);
   results[i] = { name: o.name, canvas };
-  grid.replaceChild(makeCard(i, canvas), grid.children[i]);
+  const newCard = makeCard(i, canvas);
+  grid.replaceChild(newCard, oldCard);
+  if (focusKey) {
+    for (const c of newCard.querySelectorAll('[aria-label]')) {
+      if (c.getAttribute('aria-label') === focusKey) { c.focus(); break; }
+    }
+  }
   window.scrollTo(0, scrollY);
 }
 
@@ -576,6 +611,10 @@ function makeCard(i, canvas) {
   row2.className = 'card-controls';
   row2.appendChild(mkCheck('Color guide', o.thumb, 'Show color guide for ' + o.name,
     (c) => { o.thumb = c; rerenderCard(i); }));
+  if (o.thumb) {
+    row2.appendChild(mkCheck('Above image', o.thumbAbove, 'Place color guide above the image for ' + o.name,
+      (c) => { o.thumbAbove = c; rerenderCard(i); }));
+  }
   card.appendChild(row2);
   if (o.thumb) {
     card.appendChild(mkSlider('Guide size', 10, 40, o.thumbScale, '%', 'Color guide size for ' + o.name,
