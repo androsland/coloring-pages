@@ -115,7 +115,7 @@
     z-index: 50;
     background: rgba(15, 23, 42, 0.88);
     overflow: auto;
-    padding: 56px 24px 24px;
+    padding: 56px 24px 210px;   /* bottom room so the panel never hides the page */
   }
   .lightbox[hidden] { display: none; }
   .lightbox-bar {
@@ -144,8 +144,24 @@
     margin: auto;            /* center when smaller than the viewport */
     background: #fff;
     box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
-    cursor: zoom-out;
   }
+  /* Per-image controls, floating over the viewer so you can tweak full screen. */
+  .lightbox-panel {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    z-index: 60;
+    width: max-content;
+    max-width: min(720px, calc(100vw - 32px));
+    max-height: 42vh;
+    overflow-y: auto;
+    background: var(--card);
+    border-radius: var(--radius);
+    box-shadow: 0 12px 44px rgba(0, 0, 0, 0.55);
+    padding: 6px 18px 12px;
+  }
+  .lightbox-panel:empty { display: none; }
   .card .name {
     font-size: 0.8rem;
     color: var(--muted);
@@ -253,6 +269,7 @@
     <button class="lightbox-close" id="lightboxClose" aria-label="Close viewer">&times;</button>
   </div>
   <div class="lightbox-stage" id="lightboxStage"></div>
+  <div class="lightbox-panel" id="lightboxPanel"></div>
 </div>
 
 <script>
@@ -576,6 +593,47 @@ function mkSelect(text, options, value, aria, onChange) {
   return wrap;
 }
 
+// Build the per-image control rows for card i as a fragment. `commit` runs
+// after any change that alters the rendered page, so the same controls work on
+// both the grid card and the fullscreen viewer. Sliders update state live and
+// only commit on release; checkboxes/selects commit immediately.
+function buildControls(i, commit) {
+  const o = originals[i];
+  const frag = document.createDocumentFragment();
+
+  // Row 1: style + speck removal (both change the outline).
+  const row1 = document.createElement('div');
+  row1.className = 'card-controls';
+  row1.appendChild(mkSelect('', Object.entries(STYLE_LABELS), o.style,
+    'Style for ' + o.name, (v) => { o.style = v; commit(); }));
+  row1.appendChild(mkCheck('Remove specks', o.despeckle, 'Remove specks for ' + o.name,
+    (c) => { o.despeckle = c; commit(); }));
+  frag.appendChild(row1);
+
+  // Detail only affects the Bold (threshold) path, so show it only there.
+  if (o.style === 'threshold') {
+    frag.appendChild(mkSlider('Detail', 1, 20, o.detail, '', 'Detail (fewer to more lines) for ' + o.name,
+      (v) => { o.detail = v; }, commit));
+  }
+
+  // Row 2: color guide on/off, plus its size when on.
+  const row2 = document.createElement('div');
+  row2.className = 'card-controls';
+  row2.appendChild(mkCheck('Color guide', o.thumb, 'Show color guide for ' + o.name,
+    (c) => { o.thumb = c; commit(); }));
+  if (o.thumb) {
+    row2.appendChild(mkCheck('Above image', o.thumbAbove, 'Place color guide above the image for ' + o.name,
+      (c) => { o.thumbAbove = c; commit(); }));
+  }
+  frag.appendChild(row2);
+  if (o.thumb) {
+    frag.appendChild(mkSlider('Guide size', 10, 40, o.thumbScale, '%', 'Color guide size for ' + o.name,
+      (v) => { o.thumbScale = v; }, commit));
+  }
+
+  return frag;
+}
+
 function makeCard(i, canvas) {
   const o = originals[i];
   const card = document.createElement('div');
@@ -585,41 +643,13 @@ function makeCard(i, canvas) {
   canvas.setAttribute('tabindex', '0');
   canvas.setAttribute('aria-label', 'View ' + o.name + ' at actual size');
   canvas.title = 'Click to view actual size';
-  canvas.addEventListener('click', () => openLightbox(canvas, o.name));
+  canvas.addEventListener('click', () => openLightbox(i));
   canvas.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openLightbox(canvas, o.name); }
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openLightbox(i); }
   });
   card.appendChild(canvas);
 
-  // Row 1: style + speck removal (both change the outline -> re-render).
-  const row1 = document.createElement('div');
-  row1.className = 'card-controls';
-  row1.appendChild(mkSelect('', Object.entries(STYLE_LABELS), o.style,
-    'Style for ' + o.name, (v) => { o.style = v; rerenderCard(i); }));
-  row1.appendChild(mkCheck('Remove specks', o.despeckle, 'Remove specks for ' + o.name,
-    (c) => { o.despeckle = c; rerenderCard(i); }));
-  card.appendChild(row1);
-
-  // Detail only affects the Bold (threshold) path, so show it only there.
-  if (o.style === 'threshold') {
-    card.appendChild(mkSlider('Detail', 1, 20, o.detail, '', 'Detail (fewer to more lines) for ' + o.name,
-      (v) => { o.detail = v; }, () => rerenderCard(i)));
-  }
-
-  // Row 2: color guide on/off, plus its size when on (both re-render).
-  const row2 = document.createElement('div');
-  row2.className = 'card-controls';
-  row2.appendChild(mkCheck('Color guide', o.thumb, 'Show color guide for ' + o.name,
-    (c) => { o.thumb = c; rerenderCard(i); }));
-  if (o.thumb) {
-    row2.appendChild(mkCheck('Above image', o.thumbAbove, 'Place color guide above the image for ' + o.name,
-      (c) => { o.thumbAbove = c; rerenderCard(i); }));
-  }
-  card.appendChild(row2);
-  if (o.thumb) {
-    card.appendChild(mkSlider('Guide size', 10, 40, o.thumbScale, '%', 'Color guide size for ' + o.name,
-      (v) => { o.thumbScale = v; }, () => rerenderCard(i)));
-  }
+  card.appendChild(buildControls(i, () => rerenderCard(i)));
 
   const label = document.createElement('div');
   label.className = 'name';
@@ -655,26 +685,56 @@ el('downloadAll').onclick = () => {
 
 // ---- Actual-size viewer -------------------------------------------------
 // Click a page to see it at 1:1 pixels (the on-card preview is scaled down, so
-// this is where you check fine line detail). Dismiss via the image, backdrop,
-// the close button, or Escape.
-const lightbox = el('lightbox'), lightboxStage = el('lightboxStage'), lightboxCaption = el('lightboxCaption');
+// this is where you check fine line detail). The same per-image controls are
+// available here, so tweaks can be made while viewing full screen. Dismiss via
+// the backdrop, the close button, or Escape.
+const lightbox = el('lightbox'), lightboxStage = el('lightboxStage'),
+  lightboxCaption = el('lightboxCaption'), lightboxPanel = el('lightboxPanel');
 let lightboxReturnFocus = null;
+let lightboxIndex = null;
 
-function openLightbox(canvas, name) {
-  const img = new Image();
+function setLightboxImage() {
+  const o = originals[lightboxIndex], canvas = results[lightboxIndex].canvas;
+  let img = lightboxStage.querySelector('img');
+  if (!img) { img = new Image(); lightboxStage.replaceChildren(img); }
   img.src = canvas.toDataURL('image/png');
-  img.alt = name + ' at actual size';
-  img.addEventListener('click', closeLightbox);
-  lightboxStage.replaceChildren(img);
-  lightboxCaption.textContent = `${name}.png · ${canvas.width} × ${canvas.height} px`;
+  img.alt = o.name + ' at actual size';
+  lightboxCaption.textContent = `${o.name}.png · ${canvas.width} × ${canvas.height} px`;
+}
+
+function openLightbox(i) {
+  lightboxIndex = i;
+  setLightboxImage();
+  lightboxPanel.replaceChildren(buildControls(i, commitFromLightbox));
   lightboxReturnFocus = document.activeElement;
   lightbox.hidden = false;
   el('lightboxClose').focus();
 }
+
+// A config change made from the viewer: regenerate the page, keep the grid card
+// in sync, and refresh the fullscreen image plus its controls (which may add or
+// drop rows, e.g. Detail only shows for Bold). Focus is preserved across the
+// control rebuild so arrow-key slider edits keep working.
+function commitFromLightbox() {
+  const i = lightboxIndex;
+  rerenderCard(i);
+  setLightboxImage();
+  const active = document.activeElement;
+  const focusKey = active && lightboxPanel.contains(active) ? active.getAttribute('aria-label') : null;
+  lightboxPanel.replaceChildren(buildControls(i, commitFromLightbox));
+  if (focusKey) {
+    for (const c of lightboxPanel.querySelectorAll('[aria-label]')) {
+      if (c.getAttribute('aria-label') === focusKey) { c.focus(); break; }
+    }
+  }
+}
+
 function closeLightbox() {
   if (lightbox.hidden) return;
   lightbox.hidden = true;
   lightboxStage.replaceChildren();
+  lightboxPanel.replaceChildren();
+  lightboxIndex = null;
   if (lightboxReturnFocus && lightboxReturnFocus.focus) lightboxReturnFocus.focus();
 }
 el('lightboxClose').addEventListener('click', closeLightbox);
