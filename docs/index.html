@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" type="image/svg+xml" href="favicon.svg" />
 <title>Coloring Page Maker</title>
 <style>
   :root {
@@ -54,6 +55,36 @@
   .drop strong { color: var(--accent); font-weight: 650; }
   .drop .hint { color: var(--muted); font-size: 0.875rem; margin-top: 8px; }
   .drop input { display: none; }
+
+  .or {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.8rem;
+    margin: 16px 0 10px;
+  }
+  .url-row {
+    display: flex;
+    gap: 10px;
+    max-width: 560px;
+    margin: 0 auto;
+  }
+  .url-row input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    font-size: 0.9rem;
+    color: var(--ink);
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #fff;
+  }
+  .url-row input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-color: var(--accent);
+  }
+  @media (max-width: 480px) { .url-row { flex-direction: column; } }
 
   select {
     font: inherit;
@@ -252,6 +283,13 @@
     <div class="hint">PNG, JPG, or WEBP &middot; multiple files supported</div>
   </label>
 
+  <div class="or">or paste a link to a picture</div>
+  <div class="url-row">
+    <input type="url" id="urlInput" inputmode="url" autocomplete="off" spellcheck="false"
+           placeholder="https://example.com/photo.jpg" aria-label="Image URL" />
+    <button class="btn" id="urlAdd">Add</button>
+  </div>
+
   <div class="status" id="status">Loading the image engine…</div>
   <div class="actions">
     <button class="btn" id="printAll" disabled>Print all</button>
@@ -297,6 +335,17 @@ let pendingNote = '';   // one-shot status suffix (e.g. "skipped 2 files")
 const originals = [];
 // { name, img, style, despeckle, detail, thumb, thumbScale }
 
+// Seed a freshly added picture (from a file or a URL) with the default per-image
+// settings and queue it. Default to Bold (threshold): robust across photos and
+// cartoons alike. The per-card dropdown switches to Cartoon/Thin when wanted.
+function addOriginal(name, img) {
+  originals.push({
+    name, img, style: 'threshold',
+    despeckle: false, detail: DEFAULT_DETAIL,
+    thumb: true, thumbScale: DEFAULT_THUMB_SCALE, thumbAbove: false,
+  });
+}
+
 // ---- File intake --------------------------------------------------------
 const drop = el('drop'), fileInput = el('file');
 fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
@@ -327,13 +376,7 @@ async function handleFiles(fileList) {
     try { img = await loadImage(f); }
     catch { skipped++; continue; }
     if (!img.naturalWidth || !img.naturalHeight) { skipped++; continue; }
-    // Default to Bold (threshold): robust across photos and cartoons alike. The
-    // per-card dropdown switches to Cartoon/Thin when you want a different look.
-    originals.push({
-      name: stem(f.name), img, style: 'threshold',
-      despeckle: false, detail: DEFAULT_DETAIL,
-      thumb: true, thumbScale: DEFAULT_THUMB_SCALE, thumbAbove: false,
-    });
+    addOriginal(stem(f.name), img);
     added++;
   }
   if (!added) {
@@ -356,6 +399,61 @@ function loadImage(file) {
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('decode failed')); };
     img.src = url;
   });
+}
+
+// ---- Add from a URL -----------------------------------------------------
+// Paste a direct image link and pull it in like an upload. crossOrigin is
+// required: OpenCV reads the pixels and we later call toDataURL/toBlob, both of
+// which throw on a canvas tainted by a cross-origin image. With crossOrigin set,
+// a host that doesn't send CORS headers fails to load (onerror) instead of
+// tainting the canvas — we surface that as a clear message.
+const urlInput = el('urlInput'), urlAdd = el('urlAdd');
+urlAdd.addEventListener('click', () => addFromUrl(urlInput.value.trim()));
+urlInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); addFromUrl(urlInput.value.trim()); }
+});
+
+function loadImageFromUrl(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('load failed'));
+    img.src = url;
+  });
+}
+
+// Derive a filename stem from the URL path (used for the card label + download).
+function nameFromUrl(url) {
+  if (/^data:/i.test(url)) return 'image';
+  try {
+    const last = new URL(url, location.href).pathname.split('/').filter(Boolean).pop();
+    return (last && stem(decodeURIComponent(last))) || 'image';
+  } catch { return 'image'; }
+}
+
+async function addFromUrl(url) {
+  if (!cvReady) { statusEl.textContent = 'Still loading the engine — try again in a moment.'; return; }
+  if (!url) return;
+  if (!/^(https?:\/\/|data:image\/)/i.test(url)) {
+    statusEl.textContent = 'Enter a direct image link starting with https://.';
+    return;
+  }
+  statusEl.textContent = 'Fetching image…';
+  let img;
+  try { img = await loadImageFromUrl(url); }
+  catch {
+    statusEl.textContent = "Couldn't load that image — the site may block cross-origin use, or it isn't a direct image link.";
+    return;
+  }
+  if (!img.naturalWidth || !img.naturalHeight) {
+    statusEl.textContent = "That URL didn't return an image I can read.";
+    return;
+  }
+  addOriginal(nameFromUrl(url), img);
+  urlInput.value = '';
+  pendingNote = '';
+  rerunAll();
 }
 
 // ---- Core conversion (mirrors coloringify.py) ---------------------------

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <title>Coloring Page Maker</title>
+  <!-- Diagonal pencil, black outlines only (no fills). -->
+  <g fill="none" stroke="#000000" stroke-width="1.7"
+     stroke-linejoin="round" stroke-linecap="round"
+     transform="rotate(-135 16 16)">
+    <!-- silhouette: sharpened tip at top, eraser (rounded) at bottom -->
+    <path d="M16 3.5 L20.5 10 L20.5 24 Q20.5 26.5 18 26.5 L14 26.5 Q11.5 26.5 11.5 24 L11.5 10 Z"/>
+    <!-- collar: base of the sharpened wood -->
+    <line x1="11.5" y1="10" x2="20.5" y2="10"/>
+    <!-- exposed graphite point -->
+    <path d="M16 3.5 L17.4 6 L14.6 6 Z"/>
+    <!-- ferrule band before the eraser -->
+    <line x1="11.5" y1="21.5" x2="20.5" y2="21.5"/>
+    <line x1="11.5" y1="23.5" x2="20.5" y2="23.5"/>
+  </g>
+</svg>
