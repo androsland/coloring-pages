@@ -104,16 +104,19 @@
   note — "snapped to 100" — would remove the ambiguity. (accessibility review,
   2026-08-02)
 
-- **A deferred card swap stalls while the tab is hidden.** Committing a typed
-  value defers only the DOM swap to a `requestAnimationFrame`, and rAF is
+- **A deferred card swap repaints late while the tab is hidden.** Committing a
+  typed value defers only the DOM swap to a `requestAnimationFrame`, and rAF is
   suspended (not cancelled) for a background tab. Background the tab inside that
-  one-frame window and the on-screen canvas keeps showing the pre-edit picture
+  one-frame window and the card's thumbnail keeps showing the pre-edit picture
   until the tab is visible again. Nothing is lost or wrong meanwhile —
   `results[i]`, the field value and its `aria-valuetext` are all updated
-  synchronously, so Print and Download are correct throughout — and it needs
-  backgrounding within ~16ms of a commit to hit at all. A `visibilitychange`
-  backstop that flushes any pending swap would close it. (accessibility review,
-  2026-08-02)
+  synchronously, so Print and Download are correct throughout — and it takes
+  backgrounding within ~16ms of a commit to hit at all. The dangerous half of
+  this (a stalled swap waking up and pasting its superseded card over a newer
+  one) is fixed: `swap` now returns early unless `results[i]` still holds the
+  canvas it was scheduled for. What remains is only the late repaint, which a
+  `visibilitychange` backstop flushing pending swaps would close.
+  (accessibility + security review, 2026-08-02)
 
 ## Housekeeping
 

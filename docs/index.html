@@ -803,6 +803,12 @@ function rerenderCard(i, deferSwap) {
   results[i] = { name: o.name, canvas };
 
   const swap = () => {
+    // Another render may have landed while this swap waited for its frame — a
+    // second edit to the same card, or a rerunAll (whose setTimeout still runs
+    // when a hidden tab has rAF suspended). Whoever rendered last already put
+    // its own card in the grid, so going ahead here would replace the current
+    // picture with a superseded one while results[i] kept the newer.
+    if (!results[i] || results[i].canvas !== canvas) return;
     const scrollY = window.scrollY;
     const oldCard = grid.children[i];
     // If a control in this card had focus (e.g. a slider being nudged with the
