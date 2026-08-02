@@ -110,11 +110,16 @@
      reach for them, so the row stays calm but the value is obviously editable. */
   input.val {
     font-family: inherit;
-    border: 1px solid transparent;
+    /* Visible at rest, not just on hover: this is an editable control, and its
+       boundary has to be perceivable on its own (WCAG 1.4.11 wants 3:1 for that
+       — #7d8798 is 3.63:1 against the white card, 3.29:1 against the field). A
+       transparent border here left low-vision users with only the digits to go
+       on, and nothing at all to say the value could be typed into. */
+    border: 1px solid #7d8798;
     width: 4.2em;
     cursor: text;
   }
-  input.val:hover { border-color: #c7d7fb; background: #fff; }
+  input.val:hover { border-color: var(--accent); background: #fff; }
   input.val:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;
@@ -1109,12 +1114,18 @@ function commitFromLightbox(defer) {
   // mid-focus-transition tears out the control focus is moving to. Skipping this
   // here is worse than in the grid, because the viewer is a modal — focus would
   // land outside the dialog while it is still open and blocking the page.
+  // Whichever render is current when this runs; a later commit replaces it.
+  const stamp = results[i];
   const rebuildPanel = () => {
-    // `i` was captured when this was scheduled. Close the viewer, or reopen it
-    // on a different picture, before the frame arrives and these controls would
-    // be built for the wrong image — or poured into a panel nobody is looking
-    // at. Same reasoning as the guard in rerenderCard's swap.
-    if (lightbox.hidden || lightboxIndex !== i) return;
+    // Three ways this can arrive too late, all captured at schedule time:
+    // the viewer was closed, it moved to a different picture, or another commit
+    // has since re-rendered this one. The first two would build controls for the
+    // wrong image or for a panel nobody is looking at. The third is only wasted
+    // work today — buildControls reads originals[i] live, so a late rebuild
+    // still produces current content — but the check is what makes that true by
+    // construction rather than by luck, and this is the second time on this
+    // branch that a deferred callback outlived the state it was scheduled for.
+    if (lightbox.hidden || lightboxIndex !== i || results[i] !== stamp) return;
     const active = document.activeElement;
     const focusKey = active && lightboxPanel.contains(active) ? active.getAttribute('aria-label') : null;
     lightboxPanel.replaceChildren(buildControls(i, commitFromLightbox));
