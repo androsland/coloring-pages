@@ -87,6 +87,23 @@
   re-render on rAF — which also helps the main-thread cost tracked above.
   (accessibility review, 2026-08-02)
 
+- **Control labels are `aria-label` strings that duplicate the visible text.**
+  Each slider row is a `<div>` holding two labelable controls (the range and the
+  type-in box), so there is no single valid `<label>` target; each control names
+  itself instead. That satisfies AA — the accessible name starts with the visible
+  text, so Label in Name holds — but it is a convention with nothing enforcing it:
+  edit the visible `<span>` and no test catches the drift, and you lose the free
+  click-the-label-to-focus affordance. More robust would be `aria-labelledby`
+  pointing at the shared visible span plus a per-control visually-hidden suffix.
+  (accessibility review, 2026-08-02)
+
+- **A clamped entry is corrected silently.** Type 500 into Ink (max 100) and it
+  snaps to 100 with no announcement, so a screen-reader user only finds out by
+  re-reading the field. Not an SC 3.3.1 failure (nothing is blocked, and the
+  field does re-read correctly on refocus), but a short `aria-live="polite"`
+  note — "snapped to 100" — would remove the ambiguity. (accessibility review,
+  2026-08-02)
+
 ## Housekeeping
 
 - **Dead assignment in `add_reference()`**: `x0, y0 = x1 - 0, y1 - 0` — `x0` is

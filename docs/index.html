@@ -830,6 +830,10 @@ function mkCheck(text, checked, aria, onChange) {
 //   a whole percent.
 function mkSlider(text, min, max, value, aria, onInput, onCommit, opts = {}) {
   const labels = opts.labels, unit = opts.unit || '';
+  // Spoken form of the unit. The visible "%" lives in a decorative span the
+  // field does not own, so it has to be said explicitly or a screen-reader user
+  // hears "42" for a value a sighted user reads as "42%".
+  const unitWord = opts.unitWord || (unit === '%' ? 'percent' : unit);
   const fmt = (v) => (labels ? labels[v - min] : v + unit);
   // A <div>, not a <label>: the row holds two labelable controls now, and a
   // label wrapping both has no defined target. Each control carries its own
@@ -855,7 +859,8 @@ function mkSlider(text, min, max, value, aria, onInput, onCommit, opts = {}) {
   } else {
     val = document.createElement('input');
     val.type = 'number'; val.min = min; val.max = max; val.step = 1;
-    val.setAttribute('aria-label', aria + ', exact value');
+    val.setAttribute('aria-label',
+      aria + ', exact value' + (unitWord ? ' in ' + unitWord : ''));
   }
   val.className = 'val';
 
@@ -883,16 +888,25 @@ function mkSlider(text, min, max, value, aria, onInput, onCommit, opts = {}) {
       range.value = v;
       say(v);
       onInput(v);
-      onCommit();
+      // Deferred one frame on purpose. A change fired by Tab, or by clicking
+      // another control, runs *before* the browser has finished moving focus:
+      // commit synchronously and the card is rebuilt while document.activeElement
+      // is still <body>, so the rebuild's focus-restore finds nothing and dumps
+      // the user on the page with no cursor. A frame later the new focus has
+      // landed, and restoring by aria-label puts it where they were heading.
+      // Enter is not special-cased: it fires change natively and leaves focus
+      // in the field, which then gets restored like any other case. (Calling
+      // blur() here, as this once did, is what sent focus to <body>.)
+      requestAnimationFrame(() => onCommit());
     });
-    val.addEventListener('keydown', (e) => { if (e.key === 'Enter') val.blur(); });
   }
 
   row.append(span, range, val);
   if (!labels && unit) {
     const u = document.createElement('span');
     u.className = 'unit';
-    u.setAttribute('aria-hidden', 'true');   // already in the field's aria-label
+    // Safe to hide: the field's aria-label now spells the unit out (above).
+    u.setAttribute('aria-hidden', 'true');
     u.textContent = unit;
     row.append(u);
   }
