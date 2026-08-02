@@ -755,18 +755,26 @@ function rerunAll() {
   if (!cvReady || !originals.length) return;
   // Remember scroll position: rebuilding the grid must not yank the page to top.
   const scrollY = window.scrollY;
-  results.length = 0;
   statusEl.textContent = 'Drawing…';
   // Defer so the status paints before the (synchronous) heavy work.
   setTimeout(() => {
     // Build into a fragment and swap in one shot, so the old grid keeps its
     // height until the new cards are ready (no layout collapse, no scroll jump).
     const frag = document.createDocumentFragment();
+    const next = [];
     originals.forEach((o, i) => {
       const canvas = makeColoringPage(o);
-      results.push({ name: o.name, canvas });
+      next.push({ name: o.name, canvas });
       frag.appendChild(makeCard(i, canvas));
     });
+    // `results` and the grid change together. Every card on screen carries
+    // Print and Download buttons that look up results[i] when clicked, so a
+    // window where one has been replaced and the other has not is a window
+    // where a visible button acts on the wrong page — or on nothing at all.
+    // Rendering above can take seconds; throughout it the old cards stay live
+    // and keep working, because the entries they point at are still there.
+    results.length = 0;
+    results.push(...next);
     grid.replaceChildren(frag);
     const empty = results.length === 0;
     el('downloadAll').disabled = empty;
