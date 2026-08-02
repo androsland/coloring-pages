@@ -50,6 +50,31 @@
   the slider still moves monotonically — but the number on the badge is a target,
   not a promise. (2026-08-02)
 
+## Robustness (pre-existing, surfaced by cross-model review 2026-08-02)
+
+- **A big enough picture freezes the tab.** Intake only checks that the image
+  has non-zero dimensions; `makeColoringPage` then allocates RGBA + gray + HSV +
+  split-channel + output Mats and runs the whole pipeline synchronously on the
+  UI thread, with no pixel-count cap and no worker. A phone photo at 48MP will
+  lock the page for seconds; something larger can crash the tab. The `Line width`
+  thinning pass adds a full-image `Uint8Array` and up to 6 more full-image scans
+  on top, so this got slightly worse, but the exposure predates it. Fix is a
+  pixel-count cap with a downscale-and-warn path, or moving the pipeline into a
+  worker. (2026-08-02)
+
+- **One unreadable image aborts the whole batch.** `handleFiles` guards each
+  file while *decoding*, but `rerunAll` calls `makeColoringPage` for every image
+  with no per-image `try/catch`. An OpenCV allocation or conversion failure
+  midway leaves the status stuck on "Drawing…" and the grid never rebuilt — the
+  page looks hung rather than reporting a bad file. Wrap the per-image call and
+  render a placeholder card for failures. (2026-08-02)
+
+- **An all-black picture produces an all-black page in Cartoon.** `ink_cutoff`
+  returns 1, `v < 1` inks everything. Both implementations agree, and arguably
+  an all-black input has no line art to find, but it wastes a whole cartridge if
+  anyone actually prints it. Cheap guard: if coverage lands above ~60%, fall back
+  to a blank page and say so in the status line. (2026-08-02)
+
 ## Housekeeping
 
 - **Dead assignment in `add_reference()`**: `x0, y0 = x1 - 0, y1 - 0` — `x0` is

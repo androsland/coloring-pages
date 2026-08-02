@@ -106,9 +106,17 @@ def set_line_width(binary, width: int):
     """Redraw every stroke at the requested weight. binary: 0=ink, 255=paper.
 
     Negative widths peel layers off each stroke with Zhang-Suen thinning, which
-    (unlike erosion) refuses to remove a pixel if that would break the stroke or
-    erase it — so lines get thinner without gaps appearing. Positive widths grow
-    the ink; since ink is 0, that is an erode of the image.
+    (unlike erosion) refuses to remove a pixel if that would disconnect the
+    stroke — so lines get thinner without gaps appearing or ends retreating.
+
+    One documented exception, inherent to the algorithm: an isolated 2x2 block
+    of ink is erased outright, because all four of its pixels satisfy the delete
+    test in the same sub-pass. No other shape vanishes — a lone pixel, a 1x2
+    pair and every larger blob all keep at least one pixel. At print resolution
+    a 2x2 blob is a speck, so losing it is no worse than --despeckle, but it is
+    a real deletion rather than a thinning.
+
+    Positive widths grow the ink; since ink is 0, that is an erode of the image.
     """
     if width == 0:
         return binary

@@ -22,8 +22,11 @@ your browser's print preview when you hit Print.
 They are independent, so `Bold` + a thin Line width gives thin outlines that are
 still single strokes — which is what you want for a picture that already has
 black outlines. Thinning uses Zhang-Suen skeletonisation rather than erosion, so
-it never opens gaps in a line or erases fine detail; thickening (good for younger
-kids, or for pages that print faint) grows the ink a pixel per step.
+it will not open a gap in a line or pull its ends back. The one thing it does
+delete is an isolated 2x2 block of ink, which the algorithm removes outright; at
+print resolution that is a speck, but it is a deletion rather than a thinning.
+Thickening (good for younger kids, or for pages that print faint) grows the ink
+a pixel per step.
 
 Try it locally:
 
@@ -98,8 +101,9 @@ reproduce.)
 Line width (works with any style, `0` = leave the style's own stroke alone):
 
 - `--line-width -3 … 3`: how heavy the finished outline is. Negative peels
-  layers off every stroke (Zhang-Suen thinning, which will not break a line or
-  erase a 1px one); positive grows the ink by a pixel per step.
+  layers off every stroke (Zhang-Suen thinning: it will not break a line, pull
+  its ends back, or erase a lone pixel — but see the 2x2 caveat above); positive
+  grows the ink by a pixel per step.
 - This is orthogonal to `--style`. If a picture already has black outlines and
   `--style edges` gives you a *doubled* line, that is Canny finding both sides
   of each existing stroke — use `--style threshold --line-width -2` instead to

@@ -472,9 +472,12 @@ const DEFAULT_INK = 4, INK_MIN = 1, INK_MAX = 12;
 // Line width: how heavy the finished stroke is, independent of the style.
 // 0 leaves the outline exactly as the style drew it (the old behaviour);
 // negative shaves layers off every stroke, positive grows them.
-const LINE_WIDTH_MIN = -3, LINE_WIDTH_MAX = 3;
 const LINE_WIDTH_LABELS =
   ['Thinnest', 'Thinner', 'Thin', 'Normal', 'Thick', 'Thicker', 'Thickest'];
+// Derived, not hard-coded: the slider range and the labels must stay the same
+// length or the badge renders `undefined`, so only one of them is a free choice.
+const LINE_WIDTH_MIN = -3;
+const LINE_WIDTH_MAX = LINE_WIDTH_MIN + LINE_WIDTH_LABELS.length - 1;
 
 // Brightness cutoff that inks roughly `pct`% of the picture: the smallest V at
 // which at least that share of pixels is darker. A 256-bin histogram makes this
@@ -515,15 +518,27 @@ function despeckleMat(bin, minArea) {
 
 // Peel `rounds` layers off every stroke (Zhang-Suen thinning). Each round
 // removes the outermost ink pixel from each side of a stroke *unless* removing
-// it would break the stroke or erase it — so unlike cv.dilate this thins the
-// lines without punching gaps in them or losing already-1px detail. `bin` is
-// single-channel 8-bit, 0=ink, 255=paper. Returns a new Mat the caller deletes.
-// Border pixels are left alone (the 3x3 neighbourhood would run off the edge);
-// stray ink on the very edge of a page is not worth the extra bookkeeping.
+// it would disconnect the stroke — so unlike cv.dilate this thins the lines
+// without punching gaps in them or shortening them. `bin` is single-channel
+// 8-bit, 0=ink, 255=paper. Returns a new Mat the caller deletes.
+//
+// One documented exception, inherent to the algorithm: an isolated 2x2 block of
+// ink is erased outright (all four pixels satisfy the delete test at once). No
+// other shape vanishes — a lone pixel, a 1x2 pair and every larger blob all keep
+// at least one pixel. At print resolution a 2x2 blob is a speck, so losing it is
+// no worse than "Remove specks", but it is a real deletion, not a thinning.
+//
+// The ink buffer carries a 1px border of paper so edge pixels get thinned like
+// any other, matching the np.pad() that coloringify.py relies on. Without it the
+// two implementations disagree on every stroke touching the edge of the page.
 function thinMat(bin, rounds) {
   const w = bin.cols, h = bin.rows, src = bin.data;
-  const ink = new Uint8Array(w * h);
-  for (let i = 0; i < ink.length; i++) ink[i] = src[i] ? 0 : 1;
+  const pw = w + 2;                             // padded stride
+  const ink = new Uint8Array(pw * (h + 2));     // zero-filled = paper border
+  for (let y = 0; y < h; y++) {
+    const s = y * w, d = (y + 1) * pw + 1;
+    for (let x = 0; x < w; x++) ink[d + x] = src[s + x] ? 0 : 1;
+  }
   const doomed = [];
   for (let r = 0; r < rounds; r++) {
     let changed = false;
@@ -532,14 +547,14 @@ function thinMat(bin, rounds) {
     // one side.
     for (let step = 0; step < 2; step++) {
       doomed.length = 0;
-      for (let y = 1; y < h - 1; y++) {
-        for (let x = 1; x < w - 1; x++) {
-          const p = y * w + x;
+      for (let y = 1; y <= h; y++) {
+        for (let x = 1; x <= w; x++) {
+          const p = y * pw + x;
           if (!ink[p]) continue;
           // Neighbours clockwise from north, in Zhang-Suen's P2..P9 order.
-          const n2 = ink[p - w],     n3 = ink[p - w + 1], n4 = ink[p + 1],
-                n5 = ink[p + w + 1], n6 = ink[p + w],     n7 = ink[p + w - 1],
-                n8 = ink[p - 1],     n9 = ink[p - w - 1];
+          const n2 = ink[p - pw],     n3 = ink[p - pw + 1], n4 = ink[p + 1],
+                n5 = ink[p + pw + 1], n6 = ink[p + pw],     n7 = ink[p + pw - 1],
+                n8 = ink[p - 1],      n9 = ink[p - pw - 1];
           const b = n2 + n3 + n4 + n5 + n6 + n7 + n8 + n9;
           if (b < 2 || b > 6) continue;   // endpoint (keep) or interior (keep)
           let a = 0;                      // 0->1 transitions around the ring
@@ -568,7 +583,10 @@ function thinMat(bin, rounds) {
   }
   const out = new cv.Mat(h, w, cv.CV_8UC1);
   const dst = out.data;
-  for (let i = 0; i < ink.length; i++) dst[i] = ink[i] ? 0 : 255;
+  for (let y = 0; y < h; y++) {
+    const s = (y + 1) * pw + 1, d = y * w;
+    for (let x = 0; x < w; x++) dst[d + x] = ink[s + x] ? 0 : 255;
+  }
   return out;
 }
 
