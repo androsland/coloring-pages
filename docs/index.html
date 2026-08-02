@@ -783,26 +783,41 @@ const STYLE_LABELS = { threshold: 'Bold', edges: 'Thin', lineart: 'Cartoon' };
 
 // Re-render a single card in place when its style/despeckle changes — keeps the
 // other cards (and the scroll position) untouched.
-function rerenderCard(i) {
-  const scrollY = window.scrollY;
-  const oldCard = grid.children[i];
-  // If a control in this card had focus (e.g. a slider being nudged with the
-  // arrow keys), remember it by aria-label so we can restore focus after the
-  // rebuild — otherwise every keypress fires 'change', rebuilds the card, and
-  // drops focus, making keyboard editing impossible.
-  const active = document.activeElement;
-  const focusKey = active && oldCard.contains(active) ? active.getAttribute('aria-label') : null;
+// Regenerate page `i`. The new page lands in `results[i]` immediately, whatever
+// `deferSwap` says — Print and Download read from there, and they can fire in
+// the same gesture that commits a value (typing in a number box, then clicking
+// Print: the mousedown blurs the field, committing it, and the click runs before
+// any deferred work). Only the card's DOM swap can be postponed, never the
+// render, or that click prints the previous version of the picture.
+function rerenderCard(i, deferSwap) {
   const o = originals[i];
   const canvas = makeColoringPage(o);
   results[i] = { name: o.name, canvas };
-  const newCard = makeCard(i, canvas);
-  grid.replaceChild(newCard, oldCard);
-  if (focusKey) {
-    for (const c of newCard.querySelectorAll('[aria-label]')) {
-      if (c.getAttribute('aria-label') === focusKey) { c.focus(); break; }
+
+  const swap = () => {
+    const scrollY = window.scrollY;
+    const oldCard = grid.children[i];
+    // If a control in this card had focus (e.g. a slider being nudged with the
+    // arrow keys), remember it by aria-label so we can restore focus after the
+    // rebuild — otherwise every keypress fires 'change', rebuilds the card, and
+    // drops focus, making keyboard editing impossible.
+    const active = document.activeElement;
+    const focusKey = active && oldCard.contains(active) ? active.getAttribute('aria-label') : null;
+    const newCard = makeCard(i, canvas);
+    grid.replaceChild(newCard, oldCard);
+    if (focusKey) {
+      for (const c of newCard.querySelectorAll('[aria-label]')) {
+        if (c.getAttribute('aria-label') === focusKey) { c.focus(); break; }
+      }
     }
-  }
-  window.scrollTo(0, scrollY);
+    window.scrollTo(0, scrollY);
+  };
+
+  // A commit triggered by focus leaving a type-in box has to wait a frame: the
+  // change event fires while the browser is still mid-focus-transition, so
+  // swapping the card now would tear out the element focus is moving to and
+  // leave the user on <body>.
+  if (deferSwap) requestAnimationFrame(swap); else swap();
 }
 
 // A checkbox + text label. onChange(checked) fires on toggle.
@@ -888,16 +903,14 @@ function mkSlider(text, min, max, value, aria, onInput, onCommit, opts = {}) {
       range.value = v;
       say(v);
       onInput(v);
-      // Deferred one frame on purpose. A change fired by Tab, or by clicking
-      // another control, runs *before* the browser has finished moving focus:
-      // commit synchronously and the card is rebuilt while document.activeElement
-      // is still <body>, so the rebuild's focus-restore finds nothing and dumps
-      // the user on the page with no cursor. A frame later the new focus has
-      // landed, and restoring by aria-label puts it where they were heading.
-      // Enter is not special-cased: it fires change natively and leaves focus
-      // in the field, which then gets restored like any other case. (Calling
-      // blur() here, as this once did, is what sent focus to <body>.)
-      requestAnimationFrame(() => onCommit());
+      // `true` = hold the DOM swap for one frame. This change event fires while
+      // the browser is still moving focus, so replacing the card now would tear
+      // out the element focus is heading for and strand the user on <body>. The
+      // render itself is not deferred, so Print/Download in the same gesture
+      // still get the new page. Enter is not special-cased: it fires change
+      // natively and leaves focus in the field. (Calling blur() here, as this
+      // once did, is what sent focus to <body>.)
+      onCommit(true);
     });
   }
 
@@ -1002,7 +1015,7 @@ function makeCard(i, canvas) {
   });
   card.appendChild(canvas);
 
-  card.appendChild(buildControls(i, () => rerenderCard(i)));
+  card.appendChild(buildControls(i, (defer) => rerenderCard(i, defer)));
 
   const label = document.createElement('div');
   label.className = 'name';
@@ -1012,12 +1025,15 @@ function makeCard(i, canvas) {
   pr.className = 'btn';
   pr.textContent = 'Print';
   pr.setAttribute('aria-label', 'Print ' + o.name);
-  pr.onclick = () => printImages([canvas.toDataURL('image/png')]);
+  // Read results[i] at click time, not the canvas this card was built with: a
+  // re-render replaces it, and a click landing in the same gesture as a commit
+  // would otherwise print the superseded copy.
+  pr.onclick = () => printImages([results[i].canvas.toDataURL('image/png')]);
   card.appendChild(pr);
   const dl = document.createElement('button');
   dl.className = 'btn secondary';
   dl.textContent = 'Download';
-  dl.onclick = () => downloadCanvas(canvas, o.name);
+  dl.onclick = () => downloadCanvas(results[i].canvas, o.name);
   card.appendChild(dl);
   return card;
 }
@@ -1068,9 +1084,9 @@ function openLightbox(i) {
 // in sync, and refresh the fullscreen image plus its controls (which may add or
 // drop rows, e.g. Detail only shows for Bold). Focus is preserved across the
 // control rebuild so arrow-key slider edits keep working.
-function commitFromLightbox() {
+function commitFromLightbox(defer) {
   const i = lightboxIndex;
-  rerenderCard(i);
+  rerenderCard(i, defer);
   setLightboxImage();
   const active = document.activeElement;
   const focusKey = active && lightboxPanel.contains(active) ? active.getAttribute('aria-label') : null;
