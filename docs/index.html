@@ -807,10 +807,22 @@ function mkSlider(text, min, max, value, fmt, aria, onInput, onCommit) {
   range.setAttribute('aria-label', aria);
   const val = document.createElement('output');
   val.className = 'val';
-  val.textContent = fmt(value);
+  // A range input reports its raw number to assistive tech, which for Line
+  // width is a bare -3..3 — a different scale from the word on screen, so a
+  // screen-reader user could not tell "Normal" from "Thicker". aria-valuetext
+  // overrides that with the same text the badge shows. The badge itself is
+  // then a visual duplicate, so hide it from AT rather than have <output>'s
+  // implicit live region announce every value twice.
+  const say = (v) => {
+    const text = String(fmt(v));
+    val.textContent = text;
+    range.setAttribute('aria-valuetext', text);
+  };
+  val.setAttribute('aria-hidden', 'true');
+  say(value);
   range.addEventListener('input', () => {
     const v = parseInt(range.value, 10);
-    val.textContent = fmt(v);
+    say(v);
     onInput(v);
   });
   range.addEventListener('change', onCommit);
@@ -998,7 +1010,25 @@ function closeLightbox() {
 }
 el('lightboxClose').addEventListener('click', closeLightbox);
 lightbox.addEventListener('click', (e) => { if (e.target === lightbox) closeLightbox(); });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
+
+// Keep Tab inside the viewer while it is open. aria-modal only tells a screen
+// reader's virtual cursor to stay put; it does not constrain the browser's tab
+// order, so without this, Shift+Tab off the close button lands on a grid card
+// behind the opaque backdrop — focused, invisible, and one Enter away from
+// firing Print on some other page.
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeLightbox(); return; }
+  if (e.key !== 'Tab' || lightbox.hidden) return;
+  // getClientRects() rather than offsetParent: the control panel is
+  // position:fixed, for which offsetParent is null even when it is on screen.
+  const stops = [...lightbox.querySelectorAll(
+    'button, input, select, textarea, a[href], [tabindex]:not([tabindex="-1"])')]
+    .filter((c) => !c.disabled && c.getClientRects().length);
+  if (!stops.length) return;
+  const first = stops[0], last = stops[stops.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+});
 
 // ---- Printing -----------------------------------------------------------
 // Render the chosen pages into a hidden iframe, one per sheet, then trigger the

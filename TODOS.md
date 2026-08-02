@@ -75,6 +75,18 @@
   anyone actually prints it. Cheap guard: if coverage lands above ~60%, fall back
   to a blank page and say so in the status line. (2026-08-02)
 
+## Accessibility
+
+- **Arrow-keying a slider re-announces the whole control each press.** Every
+  committed change rebuilds the card's DOM and refocuses the slider by matching
+  `aria-label`, so a screen reader sees a brand-new element on each keystroke and
+  reads the full name again ("Line width (thin to thick) for …, slider, Thinner")
+  instead of just the new value. Not a WCAG 2.1 AA violation and the control stays
+  fully operable, but it is noticeably chattier than a native slider. Fixing it
+  means not rebuilding the DOM on every keystroke — debounce the commit, or
+  re-render on rAF — which also helps the main-thread cost tracked above.
+  (accessibility review, 2026-08-02)
+
 ## Housekeeping
 
 - **Dead assignment in `add_reference()`**: `x0, y0 = x1 - 0, y1 - 0` — `x0` is
