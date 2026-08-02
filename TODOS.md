@@ -118,6 +118,14 @@
   `visibilitychange` backstop flushing pending swaps would close.
   (accessibility + security review, 2026-08-02)
 
+- **`rerunAll` drops keyboard focus.** Adding another image rebuilds the whole
+  grid with `grid.replaceChildren`, which has no focus capture or restore — so
+  whatever card control had focus is discarded and the user lands on `<body>`.
+  This predates the per-card controls (it is identical on `main`) and is the one
+  remaining place that replaces a focused subtree without preserving focus; the
+  card swap and the viewer panel both handle it now. Fix is the same aria-label
+  capture/restore those two use. (accessibility review, 2026-08-02)
+
 ## Housekeeping
 
 - **Dead assignment in `add_reference()`**: `x0, y0 = x1 - 0, y1 - 0` — `x0` is

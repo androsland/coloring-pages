@@ -1110,6 +1110,11 @@ function commitFromLightbox(defer) {
   // here is worse than in the grid, because the viewer is a modal — focus would
   // land outside the dialog while it is still open and blocking the page.
   const rebuildPanel = () => {
+    // `i` was captured when this was scheduled. Close the viewer, or reopen it
+    // on a different picture, before the frame arrives and these controls would
+    // be built for the wrong image — or poured into a panel nobody is looking
+    // at. Same reasoning as the guard in rerenderCard's swap.
+    if (lightbox.hidden || lightboxIndex !== i) return;
     const active = document.activeElement;
     const focusKey = active && lightboxPanel.contains(active) ? active.getAttribute('aria-label') : null;
     lightboxPanel.replaceChildren(buildControls(i, commitFromLightbox));
