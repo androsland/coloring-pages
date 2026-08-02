@@ -8,6 +8,10 @@ out/
 # Tooling
 .gstack/
 
+# Python
+__pycache__/
+*.pyc
+
 # OS / editor cruft
 .DS_Store
 *.swp

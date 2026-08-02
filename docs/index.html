@@ -221,7 +221,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    flex-wrap: wrap;          /* word-valued badges (Line width) can be wide */
+    gap: 4px 8px;
     margin: 2px 0;
     font-size: 0.78rem;
     font-weight: 500;
@@ -333,7 +334,7 @@ const el = (id) => document.getElementById(id);
 const DEFAULT_DETAIL = 5, DEFAULT_THUMB_SCALE = 25;
 let pendingNote = '';   // one-shot status suffix (e.g. "skipped 2 files")
 const originals = [];
-// { name, img, style, despeckle, detail, thumb, thumbScale }
+// { name, img, style, despeckle, detail, ink, lineWidth, thumb, thumbScale }
 
 // Seed a freshly added picture (from a file or a URL) with the default per-image
 // settings and queue it. Default to Bold (threshold): robust across photos and
@@ -341,7 +342,7 @@ const originals = [];
 function addOriginal(name, img) {
   originals.push({
     name, img, style: 'threshold',
-    despeckle: false, detail: DEFAULT_DETAIL,
+    despeckle: false, detail: DEFAULT_DETAIL, ink: DEFAULT_INK, lineWidth: 0,
     thumb: true, thumbScale: DEFAULT_THUMB_SCALE, thumbAbove: false,
   });
 }
@@ -457,9 +458,41 @@ async function addFromUrl(url) {
 }
 
 // ---- Core conversion (mirrors coloringify.py) ---------------------------
-// lineart ink thresholds — mirror the Python defaults (HSV: H 0-179, S/V 0-255).
-const LINEART_V_MAX = 120, LINEART_S_MAX = 60;
 const DESPECKLE_MIN_AREA = 12;
+
+// Cartoon (lineart) ink coverage: what percentage of the picture to keep as
+// ink. The brightness cutoff behind it is measured from each image rather than
+// fixed, because "dark enough to be an outline" varies hugely between pictures
+// — on the four cartoon images this was tuned against, the same 4% target
+// resolved to cutoffs anywhere from 21 to 229. A fixed cutoff is what made this
+// style unusable on half of them. (Those images are not in the repo; `in/` is
+// gitignored so nobody commits copyrighted source pictures.)
+const DEFAULT_INK = 4, INK_MIN = 1, INK_MAX = 12;
+
+// Line width: how heavy the finished stroke is, independent of the style.
+// 0 leaves the outline exactly as the style drew it (the old behaviour);
+// negative shaves layers off every stroke, positive grows them.
+const LINE_WIDTH_MIN = -3, LINE_WIDTH_MAX = 3;
+const LINE_WIDTH_LABELS =
+  ['Thinnest', 'Thinner', 'Thin', 'Normal', 'Thick', 'Thicker', 'Thickest'];
+
+// Brightness cutoff that inks roughly `pct`% of the picture: the smallest V at
+// which at least that share of pixels is darker. A 256-bin histogram makes this
+// exact for 8-bit data in one pass, with no sort. Returns 1..255 — never 0, or
+// a picture with a pure-black region would come back completely blank.
+// Mirrors ink_cutoff() in coloringify.py; the two must agree bin for bin.
+function inkCutoff(v, pct) {
+  const d = v.data, n = d.length;
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < n; i++) hist[d[i]]++;
+  const want = n * pct / 100;
+  let below = 0;                              // pixels strictly darker than t
+  for (let t = 1; t < 256; t++) {
+    below += hist[t - 1];
+    if (below >= want) return t;
+  }
+  return 255;
+}
 
 // Remove black blobs smaller than minArea. `bin` is single-channel 8-bit,
 // 0=ink, 255=paper. Returns a new Mat the caller must delete. Mirrors
@@ -478,6 +511,85 @@ function despeckleMat(bin, minArea) {
   for (let p = 0; p < lab.length; p++) res[p] = keep[lab[p]] ? 0 : 255;
   inkMask.delete(); labels.delete(); stats.delete(); centroids.delete();
   return out;
+}
+
+// Peel `rounds` layers off every stroke (Zhang-Suen thinning). Each round
+// removes the outermost ink pixel from each side of a stroke *unless* removing
+// it would break the stroke or erase it — so unlike cv.dilate this thins the
+// lines without punching gaps in them or losing already-1px detail. `bin` is
+// single-channel 8-bit, 0=ink, 255=paper. Returns a new Mat the caller deletes.
+// Border pixels are left alone (the 3x3 neighbourhood would run off the edge);
+// stray ink on the very edge of a page is not worth the extra bookkeeping.
+function thinMat(bin, rounds) {
+  const w = bin.cols, h = bin.rows, src = bin.data;
+  const ink = new Uint8Array(w * h);
+  for (let i = 0; i < ink.length; i++) ink[i] = src[i] ? 0 : 1;
+  const doomed = [];
+  for (let r = 0; r < rounds; r++) {
+    let changed = false;
+    // Two sub-passes per round, each clearing a different pair of corners;
+    // alternating them keeps the stroke centred instead of eating it from
+    // one side.
+    for (let step = 0; step < 2; step++) {
+      doomed.length = 0;
+      for (let y = 1; y < h - 1; y++) {
+        for (let x = 1; x < w - 1; x++) {
+          const p = y * w + x;
+          if (!ink[p]) continue;
+          // Neighbours clockwise from north, in Zhang-Suen's P2..P9 order.
+          const n2 = ink[p - w],     n3 = ink[p - w + 1], n4 = ink[p + 1],
+                n5 = ink[p + w + 1], n6 = ink[p + w],     n7 = ink[p + w - 1],
+                n8 = ink[p - 1],     n9 = ink[p - w - 1];
+          const b = n2 + n3 + n4 + n5 + n6 + n7 + n8 + n9;
+          if (b < 2 || b > 6) continue;   // endpoint (keep) or interior (keep)
+          let a = 0;                      // 0->1 transitions around the ring
+          if (!n2 && n3) a++;
+          if (!n3 && n4) a++;
+          if (!n4 && n5) a++;
+          if (!n5 && n6) a++;
+          if (!n6 && n7) a++;
+          if (!n7 && n8) a++;
+          if (!n8 && n9) a++;
+          if (!n9 && n2) a++;
+          if (a !== 1) continue;          // >1 means deleting would disconnect
+          const ok = step === 0
+            ? n2 * n4 * n6 === 0 && n4 * n6 * n8 === 0
+            : n2 * n4 * n8 === 0 && n2 * n6 * n8 === 0;
+          if (ok) doomed.push(p);
+        }
+      }
+      // Delete as a batch: the test above assumes a stable neighbourhood.
+      if (doomed.length) {
+        changed = true;
+        for (const p of doomed) ink[p] = 0;
+      }
+    }
+    if (!changed) break;                  // already down to 1px everywhere
+  }
+  const out = new cv.Mat(h, w, cv.CV_8UC1);
+  const dst = out.data;
+  for (let i = 0; i < ink.length; i++) dst[i] = ink[i] ? 0 : 255;
+  return out;
+}
+
+// Grow every stroke by `rounds` pixels. Ink is 0 and paper is 255, so eroding
+// (a local minimum) is what spreads the ink. Returns a new Mat to delete.
+function fattenMat(bin, rounds) {
+  const k = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(3, 3));
+  const out = new cv.Mat();
+  cv.erode(bin, out, k, new cv.Point(-1, -1), rounds,
+           cv.BORDER_CONSTANT, cv.morphologyDefaultBorderValue());
+  k.delete();
+  return out;
+}
+
+// Redraw the outline at the requested weight. Returns a new Mat in every case
+// (including width 0) so the caller can always delete the input.
+function setLineWidth(bin, width) {
+  const w = Math.max(LINE_WIDTH_MIN, Math.min(LINE_WIDTH_MAX, width));
+  if (w < 0) return thinMat(bin, -w);
+  if (w > 0) return fattenMat(bin, w);
+  return bin.clone();
 }
 
 function makeColoringPage(o) {
@@ -503,25 +615,27 @@ function makeColoringPage(o) {
     cv.bitwise_not(out, out);                 // black lines on white
     blur.delete();
   } else if (style === 'lineart') {
-    // Keep dark, low-saturation "ink"; whiten everything else. Saturation is
-    // the key signal, so work in HSV from RGB (not the gray image).
+    // Keep the darkest `ink`% of the picture and whiten the rest.
+    //
+    // Deliberately *not* filtered on saturation. The old rule also required
+    // S < 60, on the theory that ink is grey and fills are colourful — but
+    // cartoon outlines are very often dark *and* saturated (navy, dark teal,
+    // brown), and that test threw them away, taking most of the drawing with
+    // them. Brightness alone, with a per-image cutoff, handles both.
+    //
+    // V (the HSV value: max of R/G/B) rather than luma, so a saturated colour
+    // is judged by how light it is, not by how bright it looks to the eye.
     const rgb = new cv.Mat();
     cv.cvtColor(mat, rgb, cv.COLOR_RGBA2RGB);
     const hsv = new cv.Mat();
     cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
     const channels = new cv.MatVector();
     cv.split(hsv, channels);
-    const s = channels.get(1), v = channels.get(2);
-    const vMask = new cv.Mat(), sMask = new cv.Mat();
-    // THRESH_BINARY_INV sets 255 where src <= thresh; thresh-1 makes it
-    // a strict "<" to match (v < v_max) & (s < s_max) in Python.
-    cv.threshold(v, vMask, LINEART_V_MAX - 1, 255, cv.THRESH_BINARY_INV);
-    cv.threshold(s, sMask, LINEART_S_MAX - 1, 255, cv.THRESH_BINARY_INV);
-    const ink = new cv.Mat();
-    cv.bitwise_and(vMask, sMask, ink);        // 255 where ink
-    cv.bitwise_not(ink, out);                 // black ink on white paper
-    rgb.delete(); hsv.delete(); s.delete(); v.delete(); channels.delete();
-    vMask.delete(); sMask.delete(); ink.delete();
+    const v = channels.get(2);
+    // THRESH_BINARY writes 255 where src > thresh, so thresh = cutoff - 1
+    // makes paper the pixels with V >= cutoff and ink those with V < cutoff.
+    cv.threshold(v, out, inkCutoff(v, o.ink) - 1, 255, cv.THRESH_BINARY);
+    rgb.delete(); hsv.delete(); v.delete(); channels.delete();
   } else {
     const blur = new cv.Mat();
     cv.medianBlur(gray, blur, 5);
@@ -531,11 +645,20 @@ function makeColoringPage(o) {
   }
 
   // Optional speck removal on the single-channel outline, before the color
-  // guide (which paints onto a BGR promotion of this Mat).
+  // guide (which paints onto a BGR promotion of this Mat). This runs before
+  // the line-width pass so the minimum-area test sees the specks at the size
+  // the style actually drew them.
   if (despeckle) {
     const cleaned = despeckleMat(out, DESPECKLE_MIN_AREA);
     out.delete();
     out = cleaned;
+  }
+
+  // Restroke at the chosen weight — applies to every style.
+  if (o.lineWidth) {
+    const reweighted = setLineWidth(out, o.lineWidth);
+    out.delete();
+    out = reweighted;
   }
 
   // Render the outline to an output canvas.
@@ -653,9 +776,10 @@ function mkCheck(text, checked, aria, onChange) {
   return label;
 }
 
-// A labelled range with a live value badge. onInput(value) updates state while
-// dragging; onCommit() fires on release (use it to re-render).
-function mkSlider(text, min, max, value, suffix, aria, onInput, onCommit) {
+// A labelled range with a live value badge. `fmt(value)` renders the badge —
+// most sliders show the number, Line width shows a word. onInput(value) updates
+// state while dragging; onCommit() fires on release (use it to re-render).
+function mkSlider(text, min, max, value, fmt, aria, onInput, onCommit) {
   const row = document.createElement('label');
   row.className = 'card-detail';
   const span = document.createElement('span');
@@ -665,8 +789,12 @@ function mkSlider(text, min, max, value, suffix, aria, onInput, onCommit) {
   range.setAttribute('aria-label', aria);
   const val = document.createElement('output');
   val.className = 'val';
-  val.textContent = value + suffix;
-  range.addEventListener('input', () => { val.textContent = range.value + suffix; onInput(parseInt(range.value, 10)); });
+  val.textContent = fmt(value);
+  range.addEventListener('input', () => {
+    const v = parseInt(range.value, 10);
+    val.textContent = fmt(v);
+    onInput(v);
+  });
   range.addEventListener('change', onCommit);
   row.append(span, range, val);
   return row;
@@ -710,9 +838,23 @@ function buildControls(i, commit) {
 
   // Detail only affects the Bold (threshold) path, so show it only there.
   if (o.style === 'threshold') {
-    frag.appendChild(mkSlider('Detail', 1, 20, o.detail, '', 'Detail (fewer to more lines) for ' + o.name,
+    frag.appendChild(mkSlider('Detail', 1, 20, o.detail, (v) => v,
+      'Detail (fewer to more lines) for ' + o.name,
       (v) => { o.detail = v; }, commit));
   }
+
+  // Likewise Ink is the one knob Cartoon has: how much of the picture to keep.
+  if (o.style === 'lineart') {
+    frag.appendChild(mkSlider('Ink', INK_MIN, INK_MAX, o.ink, (v) => v + '%',
+      'Ink coverage (less to more of the picture kept) for ' + o.name,
+      (v) => { o.ink = v; }, commit));
+  }
+
+  // Line width reweights whatever the style drew, so it applies to all three.
+  frag.appendChild(mkSlider('Line width', LINE_WIDTH_MIN, LINE_WIDTH_MAX, o.lineWidth,
+    (v) => LINE_WIDTH_LABELS[v - LINE_WIDTH_MIN],
+    'Line width (thin to thick) for ' + o.name,
+    (v) => { o.lineWidth = v; }, commit));
 
   // Row 2: color guide on/off, plus its size when on.
   const row2 = document.createElement('div');
@@ -725,7 +867,8 @@ function buildControls(i, commit) {
   }
   frag.appendChild(row2);
   if (o.thumb) {
-    frag.appendChild(mkSlider('Guide size', 10, 40, o.thumbScale, '%', 'Color guide size for ' + o.name,
+    frag.appendChild(mkSlider('Guide size', 10, 40, o.thumbScale, (v) => v + '%',
+      'Color guide size for ' + o.name,
       (v) => { o.thumbScale = v; }, commit));
   }
 

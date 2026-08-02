@@ -5,14 +5,18 @@ Reads every image from ./in, converts each to black-outline-on-white line art,
 and writes the result to ./out.
 
 Usage:
-    python3 coloringify.py                 # process all images in ./in
-    python3 coloringify.py --style edges   # use Canny edge style instead
+    python3 coloringify.py                    # process all images in ./in
+    python3 coloringify.py --style edges      # use Canny edge style instead
+    python3 coloringify.py --line-width -2    # same lines, drawn thinner
     python3 coloringify.py --in pics --out pages
 
 Styles:
     threshold  (default) clean "coloring-book" lines via adaptive threshold
     edges      thinner, sketchier outlines via Canny edge detection
-    lineart    keep existing ink, whiten fills — for cartoons/clip art
+    lineart    keep the darkest --ink percent of the picture — cartoons/clip art
+
+--line-width is separate from the style: it re-weights whatever the style drew,
+so `--style threshold --line-width -2` gives thin *single* outlines.
 """
 
 import argparse
@@ -42,16 +46,82 @@ def to_edges(gray, low: int, high: int):
     return cv2.bitwise_not(edges)  # invert so lines are black on white
 
 
-def to_lineart(img, v_max=120, s_max=60):
-    """For images that already have outlines: keep dark, low-saturation
-    'ink' pixels; whiten everything else. Works on the BGR image, not the
-    grayscale one, because saturation is the key signal."""
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    h, s, v = cv2.split(hsv)
-    ink = (v < v_max) & (s < s_max)
-    out = np.full(v.shape, 255, np.uint8)
-    out[ink] = 0
-    return out
+def ink_cutoff(v, pct: float) -> int:
+    """Brightness cutoff that inks roughly `pct`% of the picture: the smallest
+    V at which at least that share of pixels is darker.
+
+    Returns 1..255 — never 0, or a picture containing a pure-black region would
+    come back completely blank. Mirrors inkCutoff() in docs/index.html; the two
+    must agree bin for bin.
+    """
+    below = np.cumsum(np.bincount(v.ravel(), minlength=256))  # below[i] = count(V <= i)
+    want = v.size * pct / 100.0
+    # Smallest t >= 1 with count(V < t) >= want; count(V < t) is below[t - 1].
+    t = int(np.searchsorted(below, want, side="left")) + 1
+    return min(max(t, 1), 255)
+
+
+def to_lineart(img, ink_pct: float):
+    """For images that already have outlines: keep the darkest `ink_pct`% of
+    the picture as ink and whiten everything else.
+
+    The cutoff is measured from this image rather than fixed, because "dark
+    enough to be an outline" varies hugely between pictures — on the four
+    cartoon images this was tuned against, the same 4% target resolved to
+    cutoffs anywhere from 21 to 229. (Those images are not in the repo; `in/`
+    is gitignored so nobody commits copyrighted source pictures.)
+
+    Deliberately not filtered on saturation. The old rule also required S < 60,
+    on the theory that ink is grey and fills are colourful — but cartoon
+    outlines are very often dark *and* saturated (navy, dark teal, brown), and
+    that test threw them away, taking most of the drawing with them.
+
+    Uses V (the HSV value: max of R/G/B) rather than luma, so a saturated colour
+    is judged by how light it is, not by how bright it looks to the eye.
+    """
+    v = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)[:, :, 2]
+    return np.where(v < ink_cutoff(v, ink_pct), 0, 255).astype(np.uint8)
+
+
+def _thin_pass(ink, step: int) -> bool:
+    """One Zhang-Suen sub-pass over `ink` (1=ink), in place. True if it changed."""
+    p = np.pad(ink, 1)
+    # Neighbours clockwise from north, in Zhang-Suen's P2..P9 order.
+    n = [p[0:-2, 1:-1], p[0:-2, 2:], p[1:-1, 2:], p[2:, 2:],
+         p[2:, 1:-1], p[2:, 0:-2], p[1:-1, 0:-2], p[0:-2, 0:-2]]
+    n2, n3, n4, n5, n6, n7, n8, n9 = n
+    b = sum(n)                                       # ink neighbour count
+    a = sum(((n[i] == 0) & (n[(i + 1) % 8] == 1)).astype(np.uint8)  # 0->1 steps
+            for i in range(8))
+    corners = (((n2 * n4 * n6 == 0) & (n4 * n6 * n8 == 0)) if step == 0
+               else ((n2 * n4 * n8 == 0) & (n2 * n6 * n8 == 0)))
+    doomed = (ink == 1) & (b >= 2) & (b <= 6) & (a == 1) & corners
+    if not doomed.any():
+        return False
+    ink[doomed] = 0
+    return True
+
+
+def set_line_width(binary, width: int):
+    """Redraw every stroke at the requested weight. binary: 0=ink, 255=paper.
+
+    Negative widths peel layers off each stroke with Zhang-Suen thinning, which
+    (unlike erosion) refuses to remove a pixel if that would break the stroke or
+    erase it — so lines get thinner without gaps appearing. Positive widths grow
+    the ink; since ink is 0, that is an erode of the image.
+    """
+    if width == 0:
+        return binary
+    if width > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        return cv2.erode(binary, k, iterations=width)
+    ink = (binary == 0).astype(np.uint8)
+    for _ in range(-width):
+        changed = _thin_pass(ink, 0)
+        changed |= _thin_pass(ink, 1)
+        if not changed:
+            break                                    # already 1px everywhere
+    return np.where(ink == 1, 0, 255).astype(np.uint8)
 
 
 def despeckle(binary, min_area=12):
@@ -114,12 +184,16 @@ def convert(path: Path, style: str, args) -> "cv2.typing.MatLike | None":
     if style == "edges":
         outline = to_edges(gray, args.canny_low, args.canny_high)
     elif style == "lineart":
-        outline = to_lineart(img, args.v_max, args.s_max)
+        outline = to_lineart(img, args.ink)
     else:
         outline = to_threshold(gray, args.block_size, args.c)
     # Despeckle the single-channel outline before add_reference promotes to BGR.
+    # It runs before the line-width pass so --min-area sees the specks at the
+    # size the style actually drew them.
     if args.despeckle:
         outline = despeckle(outline, args.min_area)
+    if args.line_width:
+        outline = set_line_width(outline, args.line_width)
     if not args.no_reference:
         outline = add_reference(outline, img, args.ref_scale, args.ref_margin)
     return outline
@@ -138,12 +212,14 @@ def main() -> int:
                    help="adaptive-threshold sensitivity; higher = fewer lines (default: 5)")
     p.add_argument("--canny-low", type=int, default=50, help="Canny low threshold (default: 50)")
     p.add_argument("--canny-high", type=int, default=150, help="Canny high threshold (default: 150)")
-    # lineart style: ink = pixels darker than v-max and less saturated than s-max.
-    # OpenCV HSV ranges are H 0-179, S/V 0-255; these defaults match that scale.
-    p.add_argument("--v-max", type=int, default=120,
-                   help="lineart: max brightness (V) for a pixel to count as ink (default: 120)")
-    p.add_argument("--s-max", type=int, default=60,
-                   help="lineart: max saturation (S) for a pixel to count as ink (default: 60)")
+    # lineart style: keep the darkest --ink percent of the picture. The
+    # brightness cutoff that achieves it is measured per image.
+    p.add_argument("--ink", type=float, default=4.0,
+                   help="lineart: %% of the picture to keep as ink (default: 4)")
+    # Outline weight (works with any style). 0 leaves the style's own stroke.
+    p.add_argument("--line-width", type=int, default=0, choices=range(-3, 4),
+                   metavar="{-3..3}",
+                   help="outline weight: negative thins, positive thickens (default: 0)")
     # Optional despeckle post-process (works with any style; off by default).
     p.add_argument("--despeckle", action="store_true",
                    help="remove tiny black specks from the outline")
@@ -164,6 +240,9 @@ def main() -> int:
         return 1
     if args.block_size < 3 or args.block_size % 2 == 0:
         print("--block-size must be an odd number >= 3.", file=sys.stderr)
+        return 1
+    if not 0 < args.ink < 100:
+        print("--ink must be between 0 and 100 (exclusive).", file=sys.stderr)
         return 1
     out_dir.mkdir(parents=True, exist_ok=True)
 
