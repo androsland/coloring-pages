@@ -106,6 +106,25 @@
     min-width: 2.4em;
     text-align: center;
   }
+  /* The numeric readouts are type-in fields: styled as the badge until you
+     reach for them, so the row stays calm but the value is obviously editable. */
+  input.val {
+    font-family: inherit;
+    border: 1px solid transparent;
+    width: 4.2em;
+    cursor: text;
+  }
+  input.val:hover { border-color: #c7d7fb; background: #fff; }
+  input.val:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    background: #fff;
+  }
+  .card-detail .unit {
+    font-weight: 650;
+    color: var(--accent);
+    margin-left: -4px;
+  }
   input[type="range"] { accent-color: var(--accent); width: 180px; }
   input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
 
@@ -467,7 +486,13 @@ const DESPECKLE_MIN_AREA = 12;
 // resolved to cutoffs anywhere from 21 to 229. A fixed cutoff is what made this
 // style unusable on half of them. (Those images are not in the repo; `in/` is
 // gitignored so nobody commits copyrighted source pictures.)
-const DEFAULT_INK = 4, INK_MIN = 1, INK_MAX = 12;
+// The top of the range is well past useful for ordinary cartoon art — most
+// pictures are a solid black rectangle long before 100% — but it is the script's
+// range too, and where the ceiling actually falls depends on the picture. A
+// drawing that fills the frame with no white background needs far more than one
+// cut out on white. Better to let the slider go where the CLI goes than to cap
+// it at a number derived from a handful of images.
+const DEFAULT_INK = 4, INK_MIN = 1, INK_MAX = 100;
 
 // Line width: how heavy the finished stroke is, independent of the style.
 // 0 leaves the outline exactly as the style drew it (the old behaviour);
@@ -794,39 +819,83 @@ function mkCheck(text, checked, aria, onChange) {
   return label;
 }
 
-// A labelled range with a live value badge. `fmt(value)` renders the badge —
-// most sliders show the number, Line width shows a word. onInput(value) updates
-// state while dragging; onCommit() fires on release (use it to re-render).
-function mkSlider(text, min, max, value, fmt, aria, onInput, onCommit) {
-  const row = document.createElement('label');
+// A labelled range plus a value readout. onInput(value) updates state while
+// dragging; onCommit() fires on release (use it to re-render).
+//
+// opts.labels — names the stops, and the readout becomes a read-only word
+//   (Line width: seven named steps, where a typed number would mean nothing).
+// opts.unit   — suffix for a numeric readout, which is an editable number box:
+//   you can type an exact value instead of hunting for it with the mouse. That
+//   matters most on the long ranges — Ink runs 1-100, where a pixel of drag is
+//   a whole percent.
+function mkSlider(text, min, max, value, aria, onInput, onCommit, opts = {}) {
+  const labels = opts.labels, unit = opts.unit || '';
+  const fmt = (v) => (labels ? labels[v - min] : v + unit);
+  // A <div>, not a <label>: the row holds two labelable controls now, and a
+  // label wrapping both has no defined target. Each control carries its own
+  // aria-label, whose text starts with the visible one (SC 2.5.3).
+  const row = document.createElement('div');
   row.className = 'card-detail';
   const span = document.createElement('span');
   span.textContent = text;
   const range = document.createElement('input');
   range.type = 'range'; range.min = min; range.max = max; range.value = value;
   range.setAttribute('aria-label', aria);
-  const val = document.createElement('output');
-  val.className = 'val';
+
   // A range input reports its raw number to assistive tech, which for Line
   // width is a bare -3..3 — a different scale from the word on screen, so a
   // screen-reader user could not tell "Normal" from "Thicker". aria-valuetext
-  // overrides that with the same text the badge shows. The badge itself is
-  // then a visual duplicate, so hide it from AT rather than have <output>'s
-  // implicit live region announce every value twice.
+  // overrides that with the same text shown.
+  let val;
+  if (labels) {
+    val = document.createElement('output');
+    // Visual duplicate of aria-valuetext; hide it so <output>'s implicit live
+    // region does not announce every value a second time.
+    val.setAttribute('aria-hidden', 'true');
+  } else {
+    val = document.createElement('input');
+    val.type = 'number'; val.min = min; val.max = max; val.step = 1;
+    val.setAttribute('aria-label', aria + ', exact value');
+  }
+  val.className = 'val';
+
   const say = (v) => {
-    const text = String(fmt(v));
-    val.textContent = text;
-    range.setAttribute('aria-valuetext', text);
+    range.setAttribute('aria-valuetext', String(fmt(v)));
+    if (labels) val.textContent = fmt(v); else val.value = v;
   };
-  val.setAttribute('aria-hidden', 'true');
   say(value);
+
   range.addEventListener('input', () => {
     const v = parseInt(range.value, 10);
     say(v);
     onInput(v);
   });
   range.addEventListener('change', onCommit);
+
+  if (!labels) {
+    // Commit on change (blur / Enter / spinner), not on input — re-rendering
+    // per keystroke would fire on the "4" of "45". Out-of-range or empty input
+    // snaps back rather than being pushed through to the pipeline.
+    val.addEventListener('change', () => {
+      const typed = parseInt(val.value, 10);
+      const v = Number.isFinite(typed) ? Math.max(min, Math.min(max, typed))
+                                       : parseInt(range.value, 10);
+      range.value = v;
+      say(v);
+      onInput(v);
+      onCommit();
+    });
+    val.addEventListener('keydown', (e) => { if (e.key === 'Enter') val.blur(); });
+  }
+
   row.append(span, range, val);
+  if (!labels && unit) {
+    const u = document.createElement('span');
+    u.className = 'unit';
+    u.setAttribute('aria-hidden', 'true');   // already in the field's aria-label
+    u.textContent = unit;
+    row.append(u);
+  }
   return row;
 }
 
@@ -868,23 +937,22 @@ function buildControls(i, commit) {
 
   // Detail only affects the Bold (threshold) path, so show it only there.
   if (o.style === 'threshold') {
-    frag.appendChild(mkSlider('Detail', 1, 20, o.detail, (v) => v,
+    frag.appendChild(mkSlider('Detail', 1, 20, o.detail,
       'Detail (fewer to more lines) for ' + o.name,
       (v) => { o.detail = v; }, commit));
   }
 
   // Likewise Ink is the one knob Cartoon has: how much of the picture to keep.
   if (o.style === 'lineart') {
-    frag.appendChild(mkSlider('Ink', INK_MIN, INK_MAX, o.ink, (v) => v + '%',
+    frag.appendChild(mkSlider('Ink', INK_MIN, INK_MAX, o.ink,
       'Ink coverage (less to more of the picture kept) for ' + o.name,
-      (v) => { o.ink = v; }, commit));
+      (v) => { o.ink = v; }, commit, { unit: '%' }));
   }
 
   // Line width reweights whatever the style drew, so it applies to all three.
   frag.appendChild(mkSlider('Line width', LINE_WIDTH_MIN, LINE_WIDTH_MAX, o.lineWidth,
-    (v) => LINE_WIDTH_LABELS[v - LINE_WIDTH_MIN],
     'Line width (thin to thick) for ' + o.name,
-    (v) => { o.lineWidth = v; }, commit));
+    (v) => { o.lineWidth = v; }, commit, { labels: LINE_WIDTH_LABELS }));
 
   // Row 2: color guide on/off, plus its size when on.
   const row2 = document.createElement('div');
@@ -897,9 +965,9 @@ function buildControls(i, commit) {
   }
   frag.appendChild(row2);
   if (o.thumb) {
-    frag.appendChild(mkSlider('Guide size', 10, 40, o.thumbScale, (v) => v + '%',
+    frag.appendChild(mkSlider('Guide size', 10, 40, o.thumbScale,
       'Color guide size for ' + o.name,
-      (v) => { o.thumbScale = v; }, commit));
+      (v) => { o.thumbScale = v; }, commit, { unit: '%' }));
   }
 
   return frag;

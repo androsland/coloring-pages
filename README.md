@@ -14,6 +14,12 @@ width, and color guide + size. Every page starts on **Bold** (the robust default
 that works for photos and cartoons alike); switch a page to **Cartoon** when it
 already has outlines you want to keep (Pokémon, clip art) and use its **Ink**
 slider to set how much of the picture survives, or **Thin** for a sketchier look.
+
+Every numeric slider also has a **type-in box** next to it, so you can enter an
+exact value instead of hunting for it with the mouse. Out-of-range numbers snap
+to the nearest end rather than being pushed through. Line width keeps a plain
+word readout (`Thinnest`…`Thickest`) — its seven stops are names, not a quantity
+you would want to type.
 Tweak any card and only that page re-renders. Click any page to view it at
 **actual size** and check the line detail. Paper size and scaling are left to
 your browser's print preview when you hit Print.
@@ -84,8 +90,13 @@ python3 coloringify.py --in pics --out pages
 
 Lineart tuning:
 
-- `--ink` (default 4): what percentage of the picture to keep as ink. Raise it
-  to pull in lighter lines, lower it if fills are turning solid black.
+- `--ink` (default 4, range 0 < n <= 100): what percentage of the picture to keep
+  as ink. Raise it to pull in lighter lines, lower it if fills are turning solid
+  black. Most cartoon art on a white background is a near-solid rectangle well
+  before 20, and saturates entirely once the cutoff passes the background — but
+  where that ceiling falls is a property of the picture, not a constant, so the
+  range is deliberately not clipped to a "sensible" maximum. A drawing that fills
+  the frame with no white background needs far more than one cut out on white.
 
 The brightness cutoff behind that percentage is measured from each image, not
 fixed — on the four cartoon images this was tuned against, the same `--ink 4`
