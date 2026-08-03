@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from coloringify import (  # noqa: E402
-    convert, ink_cutoff, load_bgr, set_line_width,
+    _thin_pass, convert, ink_cutoff, load_bgr, set_line_width,
 )
 
 FIX = Path(__file__).resolve().parent
@@ -64,11 +64,15 @@ INK_LEVELS = (1, 2, 4, 8, 16, 50, 100)
 INK_MAY_BE_FLAT = {"fine-detail"}
 # flat-bands reaches a Zhang-Suen skeleton by -2, so -3 correctly does nothing.
 DEEPEST_MAY_CONVERGE = {"flat-bands"}
-# Most brightness levels an image may contain and still qualify for
-# INK_MAY_BE_FLAT. Two levels means one possible cutoff, so no percentage can
-# move it; fine-detail is pure black on pure white and has exactly 2. Every
-# other fixture has 6 or more, so none of them can be quietly added to the list.
+# What actually earns a place in INK_MAY_BE_FLAT. Counting brightness levels was
+# the wrong test: an image can have exactly two levels and still respond fine.
+# Ink at V=50 on a V=250 background moves from 10% to 100% coverage as --ink
+# rises, because the cutoff can be raised past 250. fine-detail cannot only
+# because its light level is 255 and ink_cutoff caps there (coloringify.py:61),
+# so no request can ever reach past the background. That cap is the invariant, so
+# that is what gets checked: two levels, the upper one at the ceiling.
 MAX_FLAT_LEVELS = 2
+FLAT_REQUIRES_MAX_V = 255
 
 # How far achieved ink coverage may stray from the percentage requested, in
 # percentage points, on the one fixture where the question is meaningful.
@@ -121,11 +125,15 @@ def measure():
         v = cv2.cvtColor(load_bgr(FIX / f"{name}.png"), cv2.COLOR_BGR2HSV)[:, :, 2]
         entry = {
             "ink_cutoff_at_4pct": int(ink_cutoff(v, 4.0)),
-            # How many brightness levels the image actually contains. Recorded
-            # because it is what earns a place in INK_MAY_BE_FLAT: an image with
-            # two levels has exactly one place a cutoff can go, so --ink cannot
-            # move it. Asserted in claim_ink_level_moves_the_ink.
+            # How many brightness levels the image actually contains. Half of
+            # what earns a place in INK_MAY_BE_FLAT — on its own it proves
+            # nothing, since a two-level image responds perfectly well when the
+            # cutoff can be raised past its lighter level. See max_v.
             "distinct_v": int((np.bincount(v.ravel(), minlength=256) > 0).sum()),
+            # The brightest level present. Paired with distinct_v it is what
+            # earns an INK_MAY_BE_FLAT place: ink_cutoff caps at 255, so a
+            # two-level image can only be immovable if its light level is 255.
+            "max_v": int(v.max()),
             "styles": {s: ink_pct(page(name, s)) for s in ("threshold", "edges", "lineart")},
             "line_width": {
                 str(w): ink_pct(page(name, "threshold", line_width=w))
@@ -150,8 +158,9 @@ def claim_saturated_ink_survives(data):
     s, v = hsv[:, :, 1].astype(int), hsv[:, :, 2].astype(int)
     old_rule = float(((v < 120) & (s < 60)).mean()) * 100
     now = data["saturated-ink"]["styles"]["lineart"]
-    return (old_rule < 0.5 and now > 2.0,
-            f"old rule keeps {old_rule:.2f}% (near-blank), current keeps {now:.2f}%")
+    return (old_rule < 0.5 and now > MIN_SATURATED_PCT,
+            f"old rule keeps {old_rule:.2f}% (near-blank), current keeps {now:.2f}% "
+            f"(floor {MIN_SATURATED_PCT}%)")
 
 
 def claim_cutoff_adapts(data):
@@ -212,12 +221,13 @@ def claim_ink_level_moves_the_ink(data):
     # fixture may only be listed if its histogram genuinely leaves the cutoff
     # nowhere to go.
     for name in sorted(INK_MAY_BE_FLAT):
-        levels = data[name]["distinct_v"]
-        if levels > MAX_FLAT_LEVELS:
+        levels, top = data[name]["distinct_v"], data[name]["max_v"]
+        if levels > MAX_FLAT_LEVELS or top != FLAT_REQUIRES_MAX_V:
             bad.append(f"{name} is exempted from responding to --ink on the "
-                       f"grounds that it has no midtones, but it has {levels} "
-                       f"brightness levels (limit {MAX_FLAT_LEVELS}) — the "
-                       f"exemption is not earned")
+                       f"grounds that no cutoff can move it, but it has {levels} "
+                       f"brightness levels topping out at V={top} (needs "
+                       f"<={MAX_FLAT_LEVELS} levels with the highest at "
+                       f"{FLAT_REQUIRES_MAX_V}) — the exemption is not earned")
     return not bad, (f"never decreasing; {len(responding)}/{len(NAMES)} fixtures "
                      f"respond, every one outside {sorted(INK_MAY_BE_FLAT)}"
                      if not bad else "; ".join(bad))
@@ -300,7 +310,20 @@ def claim_only_2x2_vanishes(_data):
     return ok, "; ".join(notes)
 
 
-MIN_DELTA_PP = 2.0   # observed minima are 4.13 (thinning) and 6.03 (thickening)
+# Minimum movement either side of Normal, per direction. Observed minima across
+# the fixtures are 4.13 thinning and 6.03 thickening, so these sit roughly a
+# quarter below what a healthy build delivers rather than at a token distance
+# from zero. One shared floor of 2.0 stood here first and was far too generous:
+# swapping the thickening kernel from a 3x3 ellipse to a 2x2 rect halves the
+# slider's effect, dropping the smallest thickening to 3.11pp, and passed.
+MIN_THIN_PP = 3.0
+MIN_THICK_PP = 4.5
+
+# Coverage the current ink rule must keep on saturated-ink, where the old
+# `V < 120 && S < 60` rule kept nothing. Healthy reads 9.51%. A floor of 2.0
+# stood here first, which a one-unit systematic undercount in ink_cutoff cleared
+# at 3.61% — a 62% loss of the drawing that every claim called fine.
+MIN_SATURATED_PCT = 7.0
 
 
 def claim_line_width_moves_the_ink(data):
@@ -334,10 +357,12 @@ def claim_line_width_moves_the_ink(data):
         thicks.append(thick_delta)
         if any(b < a for a, b in zip(seq, seq[1:])):
             bad.append(f"{name}: not monotonic {seq}")
-        elif thin_delta < MIN_DELTA_PP:
-            bad.append(f"{name}: thinning barely moves, {normal} -> {seq[0]}")
-        elif thick_delta < MIN_DELTA_PP:
-            bad.append(f"{name}: thickening barely moves, {normal} -> {seq[-1]}")
+        elif thin_delta < MIN_THIN_PP:
+            bad.append(f"{name}: thinning barely moves, {normal} -> {seq[0]} "
+                       f"({thin_delta:.2f}pp, floor {MIN_THIN_PP})")
+        elif thick_delta < MIN_THICK_PP:
+            bad.append(f"{name}: thickening barely moves, {normal} -> {seq[-1]} "
+                       f"({thick_delta:.2f}pp, floor {MIN_THICK_PP})")
         # Magnitude has to matter, not just direction. A set_line_width that
         # collapses every negative width to -1 and every positive to +1 clears
         # both deltas above — on one fixture by 0.05pp, i.e. by luck of that
@@ -364,26 +389,46 @@ def claim_line_width_moves_the_ink(data):
                        f"(both {seq[0]}%); the deepest thinning setting is not "
                        f"reaching the image")
 
-    # The exclusion above has to keep earning itself. STROKE_NAMES drops
-    # ink-ramp because a smooth gradient gives adaptive threshold no edges to
-    # find, so it reads 0.00% at every width and there is no stroke to thin.
-    # That is a claim like any other, and until now nothing checked it — leaving
-    # a filter expression that any future fixture could be added to in order to
-    # dodge a failure, silently shrinking what these claims cover.
+    # Both exclusions above have to keep earning themselves, or the cheapest way
+    # past this claim is to widen a list. Padding DEEPEST_MAY_CONVERGE with the
+    # five fixtures a depth-capped thinner had frozen turned a 5/6 failure into a
+    # clean pass; nothing checked that list at all while the other two were
+    # guarded, and the README claimed all of them were.
+
+    # STROKE_NAMES drops ink-ramp because a smooth gradient gives adaptive
+    # threshold no edges, so there is no stroke to thin. Measured on raw pixel
+    # counts rather than the table's 2-decimal percentages, which would round a
+    # couple of stray pixels to 0.0 and call the exclusion earned.
     for name in NAMES:
         if name in STROKE_NAMES:
             continue
-        vals = [data[name]["line_width"][str(w)] for w in WIDTHS]
-        if any(v != 0.0 for v in vals):
+        inked = {w: int((page(name, "threshold", line_width=w) == 0).sum())
+                 for w in WIDTHS}
+        if any(inked.values()):
             bad.append(f"{name} is excluded from the line-width claims on the "
-                       f"grounds that it has no strokes, but it inks {vals} "
-                       f"across the widths — either include it or change the "
-                       f"reason it is excluded")
-    return not bad, (f"monotonic everywhere; smallest thinning {min(thins):.2f}pp, "
-                     f"smallest thickening {min(thicks):.2f}pp (floor {MIN_DELTA_PP}pp "
-                     f"each); magnitude distinguishable on both sides; "
+                       f"grounds that it has no strokes, but it inks {inked} "
+                       f"pixels across the widths — either include it or change "
+                       f"the reason it is excluded")
+
+    # DEEPEST_MAY_CONVERGE exempts a fixture from moving at -3, on the grounds
+    # that Zhang-Suen has already reached a skeleton by -2 and further rounds
+    # correctly do nothing. Asked of the algorithm directly rather than inferred
+    # from the -3 reading, which would be circular: a depth cap makes -3 equal
+    # -2 for reasons that have nothing to do with convergence, and any check
+    # built on that equality would bless it. _thin_pass reports whether it can
+    # still delete anything, so it separates "converged" from "stopped early".
+    for name in sorted(DEEPEST_MAY_CONVERGE):
+        ink = (page(name, "threshold", line_width=-2) == 0).astype(np.uint8)
+        if _thin_pass(ink.copy(), 0) or _thin_pass(ink.copy(), 1):
+            bad.append(f"{name} is exempted from moving at -3 on the grounds "
+                       f"that it has converged by -2, but Zhang-Suen can still "
+                       f"remove pixels from it — the exemption is not earned")
+    return not bad, (f"monotonic everywhere; smallest thinning {min(thins):.2f}pp "
+                     f"(floor {MIN_THIN_PP}), smallest thickening {min(thicks):.2f}pp "
+                     f"(floor {MIN_THICK_PP}); magnitude distinguishable both sides; "
                      f"{deep_moves}/{len(STROKE_NAMES)} still move at -3, every "
-                     f"one outside {sorted(DEEPEST_MAY_CONVERGE)}"
+                     f"one outside {sorted(DEEPEST_MAY_CONVERGE)}, which is a "
+                     f"converged skeleton at -2"
                      if not bad else "; ".join(bad))
 
 
@@ -469,7 +514,7 @@ def main():
                 was = old.get(name, {}).get(section, {}).get(key)
                 if was != now:
                     drift.append(f"{name}/{section}/{key}: {was} -> {now}")
-        for scalar in ("ink_cutoff_at_4pct", "distinct_v"):
+        for scalar in ("ink_cutoff_at_4pct", "distinct_v", "max_v"):
             was_s = old.get(name, {}).get(scalar)
             if was_s != data[name][scalar]:
                 drift.append(f"{name}/{scalar}: {was_s} -> {data[name][scalar]}")

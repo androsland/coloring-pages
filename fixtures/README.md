@@ -44,7 +44,9 @@ exists to catch, and each one fails there:
 | the cutoff is image-specific | `ink_cutoff` pinned to a constant 128 |
 | `--ink` reaches the picture | `ink_cutoff` returning `min + 0.15*(max-min)`, discarding the requested percentage; a fixed cutoff for thin-histogram images, freezing the slider on three fixtures |
 | `--ink` inks the percentage asked for | the percentile honoured at half, at double, and at 0.65x, 0.95x and 1.05x the requested rate |
-| the exemption lists are earned | `INK_MAY_BE_FLAT` padded with three fixtures a broken cutoff had frozen; `STROKE_NAMES` widened to drop a fixture that really does have strokes |
+| the exemption lists are earned | `INK_MAY_BE_FLAT` padded with three fixtures a broken cutoff had frozen; `STROKE_NAMES` widened to drop a fixture that really does have strokes; `DEEPEST_MAY_CONVERGE` padded with the five a depth-capped thinner had frozen |
+| coloured outlines survive, by enough | a one-unit systematic undercount in `ink_cutoff`, which left 3.61% against a healthy 9.51% and cleared the old 2.0% floor |
+| line width moves the ink, by enough | the thickening kernel weakened from a 3x3 ellipse to a 2x2 rect, halving the slider and clearing the old shared 2.0pp floor at 3.11pp |
 | thinning erases only the 2x2 | plain erosion in place of Zhang-Suen; erosion bolted on after the first pass |
 | line width moves the ink | a no-op `set_line_width`; magnitude-blind variants; the thinning loop depth-capped at 1 and at 2, and capped only on "busy" pages so it froze just two fixtures; `line_width` dropped in `convert()` |
 | `--ink` affects Cartoon only | `--ink` leaked into the Bold path, and into the Thin path, inside `convert()` |
@@ -60,6 +62,10 @@ from `-2`, while `-3` silently stopped doing anything).
 The two claims added to close those gaps then shipped hollow themselves, in the
 same shape: both accepted "enough fixtures responded" rather than naming which,
 and the calibration band was wide enough to pass a systematic 35% under-inking.
+Naming the exemptions then moved the weak point onto the lists themselves, one of
+which went a full round unguarded while this file said otherwise. Every fix so
+far has relocated the problem before it removed it, which is the argument for
+attacking each round's *new* code rather than re-checking the old.
 
 The pattern behind all of them is worth naming: each verified the property it set
 out to test and assumed the one immediately adjacent. If you add a claim, break
@@ -120,15 +126,31 @@ Stated plainly, because an unlisted limit reads as coverage.
   the exclusion is checked rather than asserted in a comment: anything left out
   of `STROKE_NAMES` must really read 0.00% at every width, so a fixture cannot be
   added to that filter to dodge a failure.
-- **Two fixtures are exempt from responding to a slider, and both exemptions are
-  earned rather than declared.** `fine-detail` need not respond to `--ink`
-  (`INK_MAY_BE_FLAT`) and `flat-bands` need not move at `-3`
-  (`DEEPEST_MAY_CONVERGE`). Every other fixture must respond individually — an
-  earlier version counted instead ("at least 3 of 7"), which a cutoff that froze
-  `--ink` on exactly three images walked straight through, scoring 3/7 with the
-  slider dead on four of seven pictures. The ink exemption is now checked against
-  the image: a fixture may only be listed if it has 2 or fewer brightness levels,
-  which `fine-detail` does and no other fixture comes close to.
+- **Three lists narrow what these claims cover, and each one has to earn itself
+  against the data.** `STROKE_NAMES` drops `ink-ramp` from the line-width claims,
+  `INK_MAY_BE_FLAT` excuses `fine-detail` from responding to `--ink`, and
+  `DEEPEST_MAY_CONVERGE` excuses `flat-bands` from moving at `-3`. Every other
+  fixture must respond individually. An earlier version counted instead ("at
+  least 3 of 7"), which a cutoff that froze `--ink` on exactly three images
+  walked straight through, scoring 3/7 with the slider dead on four of seven.
+  Each list is checked:
+  - out of `STROKE_NAMES` requires a genuine zero ink pixels at every width,
+    counted raw rather than from the table's rounded percentages
+  - in `INK_MAY_BE_FLAT` requires 2 brightness levels *with the lighter at 255*.
+    The level count alone is not the invariant and briefly stood here as though
+    it were: ink at V=50 on a V=250 background also has two levels and moves from
+    10% to 100% as `--ink` rises. `fine-detail` is immovable only because
+    `ink_cutoff` caps at 255 and its background sits exactly there.
+  - in `DEEPEST_MAY_CONVERGE` requires that Zhang-Suen genuinely cannot remove
+    another pixel at `-2`, asked of `_thin_pass` directly. Inferring it from the
+    `-3` reading would be circular — a depth cap makes `-3` equal `-2` for
+    reasons that have nothing to do with convergence, and a check built on that
+    equality would bless the cap.
+
+  This list was the last one added, and until it was, padding
+  `DEEPEST_MAY_CONVERGE` with the five fixtures a depth-capped thinner had frozen
+  turned a 5/6 failure into a clean 7/7 pass — while this file already claimed
+  every exemption was earned.
 - **Coverage in percentage points, not pixel positions, on the ramp.** `--ink`
   calibration allows 0.7 points of deviation, one pixel column plus a little.
   A ratio band stood here first and was much weaker: wide enough for the bottom
