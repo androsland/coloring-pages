@@ -158,6 +158,10 @@ through, and every one of them did:
   was looking for into `open()`. The bug was never the null check or the prefix
   check: it was that two parsers each decided what the path was and only one of
   them was consulted. Refusing anything but origin-form is what makes them agree.
+  (The scheme is the load-bearing half. A bare `//evil/docs/x` never reaches the
+  handler intact — `BaseHTTPRequestHandler.parse_request` collapses repeated
+  leading slashes first, so the prefix rule catches it. `/////docs/index.html`
+  arrives as `/docs/index.html` and is served, correctly.)
 
 A known limit of that model: a symlink placed inside `docs/` or `fixtures/`
 pointing at a file outside the repo would be served, because it resolves to a

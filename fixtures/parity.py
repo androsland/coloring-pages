@@ -194,11 +194,19 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
         code to send, and urlsplit() discards `http://a%00b` as the authority:
         the gate sees `/docs/x` and approves it, while translate_path() reads
         the *raw* self.path and resolves something else entirely, carrying the
-        null byte the gate was looking for straight into open(). A leading `//`
-        is the same trick without a scheme. The bug was never the null check or
-        the prefix check — it was that two different parsers each decided what
-        the path was, and only one of them was being consulted. Refusing
-        anything but origin-form is what makes them agree.
+        null byte the gate was looking for straight into open(). The bug was
+        never the null check or the prefix check — it was that two different
+        parsers each decided what the path was, and only one of them was being
+        consulted. Refusing anything but origin-form is what makes them agree.
+
+        Which half of that test does the work is worth being exact about. The
+        scheme case is load-bearing. The leading-`//` case is belt-and-braces:
+        BaseHTTPRequestHandler.parse_request already collapses repeated leading
+        slashes, so `//evil/docs/x` arrives here as `/evil/docs/x` and the prefix
+        rule is what refuses it. Measured rather than assumed —
+        `/////docs/index.html` reaches this method as `/docs/index.html` and is
+        correctly served. The check stays because it costs nothing and this class
+        should not quietly depend on that stdlib behaviour continuing.
         """
         raw = self.path
         if not raw.startswith("/") or raw.startswith("//"):
