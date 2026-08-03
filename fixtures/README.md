@@ -125,12 +125,19 @@ cell. Two passes, because they fail in different ways.
 The server answers for `/docs/` and `/fixtures/` and 404s everything else, so
 `in/` — your own pictures, gitignored on purpose — along with `.git/` and
 `.gstack/` are never on that port. No directories either, at any depth. The
-allowlist is checked at startup rather than trusted: `check_server_scope()` asks
-the running server for sixteen paths it must refuse and two it must serve, and
-refuses to run if any of them answers wrong.
+allowlist is checked at startup rather than trusted: `check_server_scope()` sends
+the running server twenty request targets it must refuse and two it must serve,
+down a raw socket so a client library cannot tidy them up on the way out, and
+refuses to run if any answers wrong.
 
-Three of those sixteen are there because the obvious guard lets them through,
-and each one did:
+It compares the reason phrase, not just the status code. `404 Not served` is this
+gate refusing; the stdlib's `404 File not found` is the allowlist having let the
+request through and the filesystem happening to have nothing there — which is a
+property of how the repo is laid out today, not a control. Two of the bypasses
+below scored 404 on the broken build precisely that way.
+
+Four of the twenty are there because an obvious version of the guard lets them
+through, and every one of them did:
 
 - `/docs/../.git/config` — `SimpleHTTPRequestHandler` collapses `..` *before* it
   filters components, so a `startswith("/docs/")` test on the requested path
@@ -143,6 +150,19 @@ and each one did:
 - `/fixtures/__pycache__/` — a directory *inside* an allowed prefix still listed,
   631 bytes of build artefacts. The prefix rule only kills `/` and `/docs/`,
   because normpath strips their trailing slash.
+- `http://a%00b/docs/x` — the interesting one, and the reason the guard is shaped
+  the way it is. An absolute-form request target is legal HTTP and one line of
+  socket code to send. `urlsplit()` throws `http://a%00b` away as the authority,
+  so the gate reads `/docs/x` and approves it, while `translate_path()` reads the
+  *raw* string and resolves something else — carrying the very null byte the gate
+  was looking for into `open()`. The bug was never the null check or the prefix
+  check: it was that two parsers each decided what the path was and only one of
+  them was consulted. Refusing anything but origin-form is what makes them agree.
+
+A known limit of that model: a symlink placed inside `docs/` or `fixtures/`
+pointing at a file outside the repo would be served, because it resolves to a
+file rather than a directory. None exist today, and nothing in the harness
+creates one.
 
 **maths** — 147 cells: every fixture through all three styles, all seven line
 widths, all seven ink levels, three Detail settings, and speck removal alone and

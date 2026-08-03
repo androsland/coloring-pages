@@ -50,11 +50,11 @@ together, and this pass would be silent.
 import argparse
 import base64
 import functools
-import http.client
 import http.server
 import os
 import posixpath
 import re
+import socket
 import socketserver
 import sys
 import threading
@@ -164,42 +164,67 @@ def matrix():
 # this cannot be wrong about a directory nobody has created yet.
 SERVED_PREFIXES = ("/docs/", "/fixtures/")
 
+# The reason phrase this gate refuses with. Distinct from the stdlib's
+# "File not found" on purpose: check_server_scope() needs to tell "the
+# allowlist said no" apart from "the allowlist let it through and the file
+# happened not to exist", which are the same status code and very different
+# facts.
+REFUSED = "Not served"
+
 
 class _Handler(http.server.SimpleHTTPRequestHandler):
     """Serves docs/ and fixtures/ only, plus one in-memory page for --falsify."""
 
     mutant_html = None
 
-    def _resolved_path(self) -> str:
-        """The path this request will actually reach, with `..` collapsed.
+    def _resolved_path(self):
+        """The path this request will actually reach, or None to refuse it.
 
-        Testing `self.path` as it arrives is not enough. SimpleHTTPRequestHandler
-        runs posixpath.normpath *before* it drops `..` components, so
-        `/docs/../.git/config` resolves to `<root>/.git/config` on the filesystem
-        while still passing a startswith("/docs/") test on the raw string. Collapse
-        it here so the allowlist sees the same path the filesystem will.
+        Two things have to hold, and the second is the one that got past the
+        first attempt at this.
+
+        `..` must be collapsed before the allowlist sees the path.
+        SimpleHTTPRequestHandler runs normpath *before* it drops `..`
+        components, so `/docs/../.git/config` resolves to `<root>/.git/config`
+        on disk while still passing a startswith("/docs/") test on the raw
+        string.
+
+        And the request target must be in origin-form — an absolute path.
+        `GET http://a%00b/docs/x HTTP/1.1` is legal HTTP and one line of socket
+        code to send, and urlsplit() discards `http://a%00b` as the authority:
+        the gate sees `/docs/x` and approves it, while translate_path() reads
+        the *raw* self.path and resolves something else entirely, carrying the
+        null byte the gate was looking for straight into open(). A leading `//`
+        is the same trick without a scheme. The bug was never the null check or
+        the prefix check — it was that two different parsers each decided what
+        the path was, and only one of them was being consulted. Refusing
+        anything but origin-form is what makes them agree.
         """
-        raw = urllib.parse.urlsplit(self.path).path
-        return posixpath.normpath(urllib.parse.unquote(raw))
+        raw = self.path
+        if not raw.startswith("/") or raw.startswith("//"):
+            return None
+        return posixpath.normpath(urllib.parse.unquote(urllib.parse.urlsplit(raw).path))
 
     def send_head(self):
         # The one choke point both do_GET and do_HEAD funnel through, so the
         # allowlist cannot be walked around with a different method.
         path = self._resolved_path()
-        # A null byte survives normpath and the prefix test — /docs/index.html%00.git
-        # is still under /docs/ — and then reaches the stdlib's open(), which raises
-        # ValueError and takes the handler thread down with it. Nothing leaks, but
-        # an unhandled crash in the one function that exists to be trustworthy is
-        # not a good look. Refuse it here.
-        if "\x00" in path or not path.startswith(SERVED_PREFIXES):
-            self.send_error(404, "Not served")
+        # None means the request target was not origin-form, so nothing below
+        # could be trusted to describe it. A null byte survives normpath and the
+        # prefix test — /docs/index.html%00.git is still under /docs/ — and then
+        # reaches the stdlib's open(), which raises ValueError and takes the
+        # handler thread down with it. Nothing leaks either way, but an unhandled
+        # crash in the one function that exists to be trustworthy is not a good
+        # look.
+        if path is None or "\x00" in path or not path.startswith(SERVED_PREFIXES):
+            self.send_error(404, REFUSED)
             return None
         # No directory listings, ever. normpath strips the trailing slash, so "/"
         # and "/docs/" already fail the prefix test — but a directory *inside* an
         # allowed prefix does not, and fixtures/__pycache__/ was listing 631 bytes
         # of build artefacts. The harness only ever asks for files.
         if os.path.isdir(self.translate_path(self.path)):
-            self.send_error(404, "Not served")
+            self.send_error(404, REFUSED)
             return None
         return super().send_head()
 
@@ -245,9 +270,10 @@ def serve(root: Path):
     return httpd, httpd.server_address[1]
 
 
-# Paths that must never be served, and the two that must. Sent verbatim over
-# http.client rather than urllib, which would helpfully collapse the traversal
-# cases client-side and turn them into a test of nothing.
+# Request targets that must never be served, and the two that must. Sent down a
+# raw socket, because the ones that matter most are exactly the ones any HTTP
+# client library would tidy up on the way out: an absolute-form target, a `..`
+# chain, a %00.
 #
 # `/in/` and `/.gstack/browse.json` only exist on a machine that has used either,
 # so on a fresh clone they would 404 whatever the allowlist did. They are here
@@ -259,14 +285,23 @@ MUST_404 = ("/", "/docs/", "/fixtures/", "/.git/config", "/.gstack/browse.json",
             "/docs/../.git/config", "/fixtures/../.gstack/browse.json",
             "/docs/%2e%2e/.git/config", "//.git/config",
             # Null byte: passes the prefix test and used to crash the handler
-            # thread inside the stdlib's open(). status() reports a dropped
-            # connection as a leak, so a regression here fails loudly.
+            # thread inside the stdlib's open(). A dropped connection scores 0
+            # here, not 404, so a regression fails loudly rather than quietly.
             "/docs/index.html%00.git", "/fixtures/grey-ink.png%00x",
             # A directory inside an allowed prefix. __pycache__ is the only one
             # that reliably exists, because importing report.py writes it — so
             # under PYTHONDONTWRITEBYTECODE this single entry passes vacuously
             # while every other one still carries the check.
-            "/fixtures/__pycache__/", "/fixtures/__pycache__")
+            "/fixtures/__pycache__/", "/fixtures/__pycache__",
+            # Absolute-form request targets. urlsplit() throws the scheme and
+            # authority away as netloc, so a gate reading only urlsplit(...).path
+            # approves "/docs/x" while the stdlib resolves the whole raw string —
+            # carrying a %00, or `..` segments, past a check that never saw them.
+            # The first of these crashed the handler; the second reached the file
+            # layer and answered with the stdlib's own 404 rather than this
+            # server's, which is how it was spotted.
+            "http://a%00b/docs/x", "http://evil.example/docs/index.html",
+            "http://..%2f.git%2fconfig/docs/x", "//evil.example/docs/index.html")
 MUST_200 = ("/docs/index.html", "/fixtures/grey-ink.png")
 
 
@@ -280,27 +315,47 @@ def check_server_scope(port: int):
     """
     bad = []
 
-    def status(path):
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-        try:
-            conn.request("GET", path)
-            r = conn.getresponse()
-            r.read()
-            return r.status
-        finally:
-            conn.close()
+    def status(target):
+        """(code, reason) for a request target sent exactly as written.
+
+        A raw socket rather than an HTTP client, because the entries that matter
+        most are the ones a client library normalises or rejects before they
+        reach the wire, which would leave them testing the library instead of the
+        server. Returns (0, "") when there was no status line at all — a dropped
+        connection is a handler that crashed, and that must not score as a 404.
+        """
+        chunks = []
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+            s.sendall(f"GET {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                      f"Connection: close\r\n\r\n".encode())
+            while True:
+                block = s.recv(4096)
+                if not block:
+                    break
+                chunks.append(block)
+        line = b"".join(chunks).split(b"\r\n", 1)[0].decode("latin-1").split()
+        if len(line) > 1 and line[1].isdigit():
+            return int(line[1]), " ".join(line[2:])
+        return 0, ""
 
     for p in MUST_404:
         try:
-            code = status(p)
+            code, reason = status(p)
         except Exception as e:
             bad.append(f"{p} raised {type(e).__name__}")
             continue
-        if code != 404:
-            bad.append(f"{p} answered {code}, expected 404")
+        # The reason phrase, not just the code. `send_error(404, "Not served")`
+        # is this gate refusing; the stdlib's "File not found" is the filesystem
+        # happening not to have anything there, which is a property of how the
+        # repository is laid out today rather than a control. An absolute-form
+        # target that walks past the gate and dead-ends in a missing file scores
+        # 404 either way, and that is exactly the bypass this list exists to
+        # catch — so the two are distinguished.
+        if (code, reason) != (404, REFUSED):
+            bad.append(f"{p} answered {code} {reason!r}, expected 404 {REFUSED!r}")
     for p in MUST_200:
         try:
-            code = status(p)
+            code, _ = status(p)
         except Exception as e:
             bad.append(f"{p} raised {type(e).__name__}")
             continue
