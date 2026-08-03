@@ -249,8 +249,8 @@ def main() -> int:
     if args.block_size < 3 or args.block_size % 2 == 0:
         print("--block-size must be an odd number >= 3.", file=sys.stderr)
         return 1
-    if not 0 < args.ink < 100:
-        print("--ink must be between 0 and 100 (exclusive).", file=sys.stderr)
+    if not 0 < args.ink <= 100:
+        print("--ink must be greater than 0 and at most 100.", file=sys.stderr)
         return 1
     out_dir.mkdir(parents=True, exist_ok=True)
 

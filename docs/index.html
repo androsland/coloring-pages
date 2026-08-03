@@ -106,6 +106,30 @@
     min-width: 2.4em;
     text-align: center;
   }
+  /* The numeric readouts are type-in fields: styled as the badge until you
+     reach for them, so the row stays calm but the value is obviously editable. */
+  input.val {
+    font-family: inherit;
+    /* Visible at rest, not just on hover: this is an editable control, and its
+       boundary has to be perceivable on its own (WCAG 1.4.11 wants 3:1 for that
+       — #7d8798 is 3.63:1 against the white card, 3.29:1 against the field). A
+       transparent border here left low-vision users with only the digits to go
+       on, and nothing at all to say the value could be typed into. */
+    border: 1px solid #7d8798;
+    width: 4.2em;
+    cursor: text;
+  }
+  input.val:hover { border-color: var(--accent); background: #fff; }
+  input.val:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    background: #fff;
+  }
+  .card-detail .unit {
+    font-weight: 650;
+    color: var(--accent);
+    margin-left: -4px;
+  }
   input[type="range"] { accent-color: var(--accent); width: 180px; }
   input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
 
@@ -467,7 +491,13 @@ const DESPECKLE_MIN_AREA = 12;
 // resolved to cutoffs anywhere from 21 to 229. A fixed cutoff is what made this
 // style unusable on half of them. (Those images are not in the repo; `in/` is
 // gitignored so nobody commits copyrighted source pictures.)
-const DEFAULT_INK = 4, INK_MIN = 1, INK_MAX = 12;
+// The top of the range is well past useful for ordinary cartoon art — most
+// pictures are a solid black rectangle long before 100% — but it is the script's
+// range too, and where the ceiling actually falls depends on the picture. A
+// drawing that fills the frame with no white background needs far more than one
+// cut out on white. Better to let the slider go where the CLI goes than to cap
+// it at a number derived from a handful of images.
+const DEFAULT_INK = 4, INK_MIN = 1, INK_MAX = 100;
 
 // Line width: how heavy the finished stroke is, independent of the style.
 // 0 leaves the outline exactly as the style drew it (the old behaviour);
@@ -730,18 +760,26 @@ function rerunAll() {
   if (!cvReady || !originals.length) return;
   // Remember scroll position: rebuilding the grid must not yank the page to top.
   const scrollY = window.scrollY;
-  results.length = 0;
   statusEl.textContent = 'Drawing…';
   // Defer so the status paints before the (synchronous) heavy work.
   setTimeout(() => {
     // Build into a fragment and swap in one shot, so the old grid keeps its
     // height until the new cards are ready (no layout collapse, no scroll jump).
     const frag = document.createDocumentFragment();
+    const next = [];
     originals.forEach((o, i) => {
       const canvas = makeColoringPage(o);
-      results.push({ name: o.name, canvas });
+      next.push({ name: o.name, canvas });
       frag.appendChild(makeCard(i, canvas));
     });
+    // `results` and the grid change together. Every card on screen carries
+    // Print and Download buttons that look up results[i] when clicked, so a
+    // window where one has been replaced and the other has not is a window
+    // where a visible button acts on the wrong page — or on nothing at all.
+    // Rendering above can take seconds; throughout it the old cards stay live
+    // and keep working, because the entries they point at are still there.
+    results.length = 0;
+    results.push(...next);
     grid.replaceChildren(frag);
     const empty = results.length === 0;
     el('downloadAll').disabled = empty;
@@ -758,26 +796,47 @@ const STYLE_LABELS = { threshold: 'Bold', edges: 'Thin', lineart: 'Cartoon' };
 
 // Re-render a single card in place when its style/despeckle changes — keeps the
 // other cards (and the scroll position) untouched.
-function rerenderCard(i) {
-  const scrollY = window.scrollY;
-  const oldCard = grid.children[i];
-  // If a control in this card had focus (e.g. a slider being nudged with the
-  // arrow keys), remember it by aria-label so we can restore focus after the
-  // rebuild — otherwise every keypress fires 'change', rebuilds the card, and
-  // drops focus, making keyboard editing impossible.
-  const active = document.activeElement;
-  const focusKey = active && oldCard.contains(active) ? active.getAttribute('aria-label') : null;
+// Regenerate page `i`. The new page lands in `results[i]` immediately, whatever
+// `deferSwap` says — Print and Download read from there, and they can fire in
+// the same gesture that commits a value (typing in a number box, then clicking
+// Print: the mousedown blurs the field, committing it, and the click runs before
+// any deferred work). Only the card's DOM swap can be postponed, never the
+// render, or that click prints the previous version of the picture.
+function rerenderCard(i, deferSwap) {
   const o = originals[i];
   const canvas = makeColoringPage(o);
   results[i] = { name: o.name, canvas };
-  const newCard = makeCard(i, canvas);
-  grid.replaceChild(newCard, oldCard);
-  if (focusKey) {
-    for (const c of newCard.querySelectorAll('[aria-label]')) {
-      if (c.getAttribute('aria-label') === focusKey) { c.focus(); break; }
+
+  const swap = () => {
+    // Another render may have landed while this swap waited for its frame — a
+    // second edit to the same card, or a rerunAll (whose setTimeout still runs
+    // when a hidden tab has rAF suspended). Whoever rendered last already put
+    // its own card in the grid, so going ahead here would replace the current
+    // picture with a superseded one while results[i] kept the newer.
+    if (!results[i] || results[i].canvas !== canvas) return;
+    const scrollY = window.scrollY;
+    const oldCard = grid.children[i];
+    // If a control in this card had focus (e.g. a slider being nudged with the
+    // arrow keys), remember it by aria-label so we can restore focus after the
+    // rebuild — otherwise every keypress fires 'change', rebuilds the card, and
+    // drops focus, making keyboard editing impossible.
+    const active = document.activeElement;
+    const focusKey = active && oldCard.contains(active) ? active.getAttribute('aria-label') : null;
+    const newCard = makeCard(i, canvas);
+    grid.replaceChild(newCard, oldCard);
+    if (focusKey) {
+      for (const c of newCard.querySelectorAll('[aria-label]')) {
+        if (c.getAttribute('aria-label') === focusKey) { c.focus(); break; }
+      }
     }
-  }
-  window.scrollTo(0, scrollY);
+    window.scrollTo(0, scrollY);
+  };
+
+  // A commit triggered by focus leaving a type-in box has to wait a frame: the
+  // change event fires while the browser is still mid-focus-transition, so
+  // swapping the card now would tear out the element focus is moving to and
+  // leave the user on <body>.
+  if (deferSwap === true) requestAnimationFrame(swap); else swap();
 }
 
 // A checkbox + text label. onChange(checked) fires on toggle.
@@ -794,39 +853,98 @@ function mkCheck(text, checked, aria, onChange) {
   return label;
 }
 
-// A labelled range with a live value badge. `fmt(value)` renders the badge —
-// most sliders show the number, Line width shows a word. onInput(value) updates
-// state while dragging; onCommit() fires on release (use it to re-render).
-function mkSlider(text, min, max, value, fmt, aria, onInput, onCommit) {
-  const row = document.createElement('label');
+// A labelled range plus a value readout. onInput(value) updates state while
+// dragging; onCommit() fires on release (use it to re-render).
+//
+// opts.labels — names the stops, and the readout becomes a read-only word
+//   (Line width: seven named steps, where a typed number would mean nothing).
+// opts.unit   — suffix for a numeric readout, which is an editable number box:
+//   you can type an exact value instead of hunting for it with the mouse. That
+//   matters most on the long ranges — Ink runs 1-100, where a pixel of drag is
+//   a whole percent.
+function mkSlider(text, min, max, value, aria, onInput, onCommit, opts = {}) {
+  const labels = opts.labels, unit = opts.unit || '';
+  // Spoken form of the unit. The visible "%" lives in a decorative span the
+  // field does not own, so it has to be said explicitly or a screen-reader user
+  // hears "42" for a value a sighted user reads as "42%".
+  const unitWord = opts.unitWord || (unit === '%' ? 'percent' : unit);
+  const fmt = (v) => (labels ? labels[v - min] : v + unit);
+  // A <div>, not a <label>: the row holds two labelable controls now, and a
+  // label wrapping both has no defined target. Each control carries its own
+  // aria-label, whose text starts with the visible one (SC 2.5.3).
+  const row = document.createElement('div');
   row.className = 'card-detail';
   const span = document.createElement('span');
   span.textContent = text;
   const range = document.createElement('input');
   range.type = 'range'; range.min = min; range.max = max; range.value = value;
   range.setAttribute('aria-label', aria);
-  const val = document.createElement('output');
-  val.className = 'val';
+
   // A range input reports its raw number to assistive tech, which for Line
   // width is a bare -3..3 — a different scale from the word on screen, so a
   // screen-reader user could not tell "Normal" from "Thicker". aria-valuetext
-  // overrides that with the same text the badge shows. The badge itself is
-  // then a visual duplicate, so hide it from AT rather than have <output>'s
-  // implicit live region announce every value twice.
+  // overrides that with the same text shown.
+  let val;
+  if (labels) {
+    val = document.createElement('output');
+    // Visual duplicate of aria-valuetext; hide it so <output>'s implicit live
+    // region does not announce every value a second time.
+    val.setAttribute('aria-hidden', 'true');
+  } else {
+    val = document.createElement('input');
+    val.type = 'number'; val.min = min; val.max = max; val.step = 1;
+    val.setAttribute('aria-label',
+      aria + ', exact value' + (unitWord ? ' in ' + unitWord : ''));
+  }
+  val.className = 'val';
+
   const say = (v) => {
-    const text = String(fmt(v));
-    val.textContent = text;
-    range.setAttribute('aria-valuetext', text);
+    range.setAttribute('aria-valuetext', String(fmt(v)));
+    if (labels) val.textContent = fmt(v); else val.value = v;
   };
-  val.setAttribute('aria-hidden', 'true');
   say(value);
+
   range.addEventListener('input', () => {
     const v = parseInt(range.value, 10);
     say(v);
     onInput(v);
   });
-  range.addEventListener('change', onCommit);
+  // Wrapped, not passed directly: addEventListener would hand the Event object
+  // to onCommit as its `defer` argument, and an Event is truthy — a plain slider
+  // release would silently take the deferred path meant for type-in commits.
+  range.addEventListener('change', () => onCommit());
+
+  if (!labels) {
+    // Commit on change (blur / Enter / spinner), not on input — re-rendering
+    // per keystroke would fire on the "4" of "45". Out-of-range or empty input
+    // snaps back rather than being pushed through to the pipeline.
+    val.addEventListener('change', () => {
+      const typed = parseInt(val.value, 10);
+      const v = Number.isFinite(typed) ? Math.max(min, Math.min(max, typed))
+                                       : parseInt(range.value, 10);
+      range.value = v;
+      say(v);
+      onInput(v);
+      // `true` = hold the DOM swap for one frame. This change event fires while
+      // the browser is still moving focus, so replacing the card now would tear
+      // out the element focus is heading for and strand the user on <body>. The
+      // render itself is not deferred, so Print/Download in the same gesture
+      // still get the new page. Enter is not special-cased: it fires change
+      // natively and leaves focus in the field. (Calling blur() here, as this
+      // once did, is what sent focus to <body>.)
+      onCommit(true);
+    });
+  }
+
   row.append(span, range, val);
+  if (!labels && unit) {
+    const u = document.createElement('span');
+    u.className = 'unit';
+    // Safe to hide: the field's aria-label now spells the unit out (above).
+    u.setAttribute('aria-hidden', 'true');
+    u.textContent = unit;
+    row.append(u);
+  }
   return row;
 }
 
@@ -868,23 +986,22 @@ function buildControls(i, commit) {
 
   // Detail only affects the Bold (threshold) path, so show it only there.
   if (o.style === 'threshold') {
-    frag.appendChild(mkSlider('Detail', 1, 20, o.detail, (v) => v,
+    frag.appendChild(mkSlider('Detail', 1, 20, o.detail,
       'Detail (fewer to more lines) for ' + o.name,
       (v) => { o.detail = v; }, commit));
   }
 
   // Likewise Ink is the one knob Cartoon has: how much of the picture to keep.
   if (o.style === 'lineart') {
-    frag.appendChild(mkSlider('Ink', INK_MIN, INK_MAX, o.ink, (v) => v + '%',
+    frag.appendChild(mkSlider('Ink', INK_MIN, INK_MAX, o.ink,
       'Ink coverage (less to more of the picture kept) for ' + o.name,
-      (v) => { o.ink = v; }, commit));
+      (v) => { o.ink = v; }, commit, { unit: '%' }));
   }
 
   // Line width reweights whatever the style drew, so it applies to all three.
   frag.appendChild(mkSlider('Line width', LINE_WIDTH_MIN, LINE_WIDTH_MAX, o.lineWidth,
-    (v) => LINE_WIDTH_LABELS[v - LINE_WIDTH_MIN],
     'Line width (thin to thick) for ' + o.name,
-    (v) => { o.lineWidth = v; }, commit));
+    (v) => { o.lineWidth = v; }, commit, { labels: LINE_WIDTH_LABELS }));
 
   // Row 2: color guide on/off, plus its size when on.
   const row2 = document.createElement('div');
@@ -897,9 +1014,9 @@ function buildControls(i, commit) {
   }
   frag.appendChild(row2);
   if (o.thumb) {
-    frag.appendChild(mkSlider('Guide size', 10, 40, o.thumbScale, (v) => v + '%',
+    frag.appendChild(mkSlider('Guide size', 10, 40, o.thumbScale,
       'Color guide size for ' + o.name,
-      (v) => { o.thumbScale = v; }, commit));
+      (v) => { o.thumbScale = v; }, commit, { unit: '%' }));
   }
 
   return frag;
@@ -920,7 +1037,7 @@ function makeCard(i, canvas) {
   });
   card.appendChild(canvas);
 
-  card.appendChild(buildControls(i, () => rerenderCard(i)));
+  card.appendChild(buildControls(i, (defer) => rerenderCard(i, defer)));
 
   const label = document.createElement('div');
   label.className = 'name';
@@ -930,12 +1047,15 @@ function makeCard(i, canvas) {
   pr.className = 'btn';
   pr.textContent = 'Print';
   pr.setAttribute('aria-label', 'Print ' + o.name);
-  pr.onclick = () => printImages([canvas.toDataURL('image/png')]);
+  // Read results[i] at click time, not the canvas this card was built with: a
+  // re-render replaces it, and a click landing in the same gesture as a commit
+  // would otherwise print the superseded copy.
+  pr.onclick = () => printImages([results[i].canvas.toDataURL('image/png')]);
   card.appendChild(pr);
   const dl = document.createElement('button');
   dl.className = 'btn secondary';
   dl.textContent = 'Download';
-  dl.onclick = () => downloadCanvas(canvas, o.name);
+  dl.onclick = () => downloadCanvas(results[i].canvas, o.name);
   card.appendChild(dl);
   return card;
 }
@@ -986,18 +1106,36 @@ function openLightbox(i) {
 // in sync, and refresh the fullscreen image plus its controls (which may add or
 // drop rows, e.g. Detail only shows for Bold). Focus is preserved across the
 // control rebuild so arrow-key slider edits keep working.
-function commitFromLightbox() {
+function commitFromLightbox(defer) {
   const i = lightboxIndex;
-  rerenderCard(i);
-  setLightboxImage();
-  const active = document.activeElement;
-  const focusKey = active && lightboxPanel.contains(active) ? active.getAttribute('aria-label') : null;
-  lightboxPanel.replaceChildren(buildControls(i, commitFromLightbox));
-  if (focusKey) {
-    for (const c of lightboxPanel.querySelectorAll('[aria-label]')) {
-      if (c.getAttribute('aria-label') === focusKey) { c.focus(); break; }
+  rerenderCard(i, defer);
+  setLightboxImage();                     // no focus involved; safe to do now
+  // The panel needs the same treatment as the grid card: replacing its children
+  // mid-focus-transition tears out the control focus is moving to. Skipping this
+  // here is worse than in the grid, because the viewer is a modal — focus would
+  // land outside the dialog while it is still open and blocking the page.
+  // Whichever render is current when this runs; a later commit replaces it.
+  const stamp = results[i];
+  const rebuildPanel = () => {
+    // Three ways this can arrive too late, all captured at schedule time:
+    // the viewer was closed, it moved to a different picture, or another commit
+    // has since re-rendered this one. The first two would build controls for the
+    // wrong image or for a panel nobody is looking at. The third is only wasted
+    // work today — buildControls reads originals[i] live, so a late rebuild
+    // still produces current content — but the check is what makes that true by
+    // construction rather than by luck, and this is the second time on this
+    // branch that a deferred callback outlived the state it was scheduled for.
+    if (lightbox.hidden || lightboxIndex !== i || results[i] !== stamp) return;
+    const active = document.activeElement;
+    const focusKey = active && lightboxPanel.contains(active) ? active.getAttribute('aria-label') : null;
+    lightboxPanel.replaceChildren(buildControls(i, commitFromLightbox));
+    if (focusKey) {
+      for (const c of lightboxPanel.querySelectorAll('[aria-label]')) {
+        if (c.getAttribute('aria-label') === focusKey) { c.focus(); break; }
+      }
     }
-  }
+  };
+  if (defer === true) requestAnimationFrame(rebuildPanel); else rebuildPanel();
 }
 
 function closeLightbox() {
