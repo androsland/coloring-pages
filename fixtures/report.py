@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from coloringify import (  # noqa: E402
-    ink_cutoff, load_bgr, set_line_width, to_edges, to_lineart, to_threshold,
+    convert, ink_cutoff, load_bgr, set_line_width,
 )
 
 FIX = Path(__file__).resolve().parent
@@ -43,34 +43,39 @@ def ink_pct(binary):
     return round(float((binary == 0).mean()) * 100, 2)
 
 
-def page(img, gray, style, ink=4.0, line_width=0):
-    if style == "edges":
-        out = to_edges(gray, 50, 150)
-    elif style == "lineart":
-        out = to_lineart(img, ink)
-    else:
-        out = to_threshold(gray, 9, 5)
-    if line_width:
-        out = set_line_width(out, line_width)
-    return out
+def page(name, style, ink=4.0, line_width=0):
+    """Render a fixture the way the CLI does.
+
+    Deliberately goes through `convert()` rather than calling to_threshold /
+    to_edges / to_lineart directly. An earlier version reimplemented that
+    branching here, which made one claim a tautology — it compared two outputs
+    this file had already routed identically, so it was testing the test. Worse,
+    nothing then exercised `convert()`'s own dispatch, where a regression that
+    leaked --ink into Bold would actually live.
+    """
+    args = argparse.Namespace(
+        block_size=9, c=5, canny_low=50, canny_high=150,
+        ink=ink, line_width=line_width,
+        despeckle=False, min_area=12,
+        no_reference=True, ref_scale=0.25, ref_margin=15,
+    )
+    return convert(FIX / f"{name}.png", style, args)
 
 
 def measure():
     """Every number the report asserts on, keyed for a stable diff."""
     data = {}
     for name in NAMES:
-        img = load_bgr(FIX / f"{name}.png")
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        v = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)[:, :, 2]
+        v = cv2.cvtColor(load_bgr(FIX / f"{name}.png"), cv2.COLOR_BGR2HSV)[:, :, 2]
         entry = {
             "ink_cutoff_at_4pct": int(ink_cutoff(v, 4.0)),
-            "styles": {s: ink_pct(page(img, gray, s)) for s in ("threshold", "edges", "lineart")},
+            "styles": {s: ink_pct(page(name, s)) for s in ("threshold", "edges", "lineart")},
             "line_width": {
-                str(w): ink_pct(page(img, gray, "threshold", line_width=w))
+                str(w): ink_pct(page(name, "threshold", line_width=w))
                 for w in (-3, -2, -1, 0, 1, 2, 3)
             },
             "ink_levels": {
-                str(p): ink_pct(page(img, gray, "lineart", ink=p))
+                str(p): ink_pct(page(name, "lineart", ink=p))
                 for p in (1, 2, 4, 8, 16, 50, 100)
             },
         }
@@ -126,35 +131,46 @@ def claim_only_2x2_vanishes(_data):
     return ok, "; ".join(notes)
 
 
-def claim_line_width_monotonic(data):
-    """The slider has to actually mean something: more negative is never more ink."""
+def claim_line_width_moves_the_ink(data):
+    """The slider has to actually mean something: never less ink as it rises, AND
+    a real spread end to end.
+
+    The ordering test alone is not enough — a slider that does nothing produces a
+    flat sequence, which is trivially non-decreasing. That is not hypothetical:
+    this claim shipped ordering-only and passed against a no-op set_line_width."""
     bad = []
     for name in NAMES:
         seq = [data[name]["line_width"][str(w)] for w in (-3, -2, -1, 0, 1, 2, 3)]
         if any(b < a for a, b in zip(seq, seq[1:])):
-            bad.append(f"{name}:{seq}")
-    return not bad, "non-decreasing everywhere" if not bad else f"not monotonic: {bad}"
+            bad.append(f"{name}: not monotonic {seq}")
+        elif seq[-1] - seq[0] < 2.0:
+            bad.append(f"{name}: barely moves, {seq[0]} -> {seq[-1]}")
+    spread = min(data[n]["line_width"]["3"] - data[n]["line_width"]["-3"] for n in NAMES)
+    return not bad, (f"monotonic everywhere, smallest end-to-end spread {spread:.2f}pp"
+                     if not bad else "; ".join(bad))
 
 
 def claim_ink_only_touches_cartoon(_data):
-    """`--ink` is documented as a lineart knob. Bold and Thin must ignore it."""
+    """`--ink` is documented as a lineart knob. Bold and Thin must ignore it.
+
+    Only meaningful because page() dispatches through convert(): this is a test
+    of convert()'s routing, which is where a leak would actually happen. When
+    this file did its own branching the comparison could not fail."""
     bad = []
     for name in NAMES:
-        img = load_bgr(FIX / f"{name}.png")
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         for style in ("threshold", "edges"):
-            a = ink_pct(page(img, gray, style, ink=1))
-            b = ink_pct(page(img, gray, style, ink=90))
+            a = ink_pct(page(name, style, ink=1))
+            b = ink_pct(page(name, style, ink=90))
             if a != b:
                 bad.append(f"{name}/{style} {a}!={b}")
-    return not bad, "Bold and Thin unchanged by --ink" if not bad else str(bad)
+    return not bad, "Bold and Thin unchanged by --ink (through convert)" if not bad else str(bad)
 
 
 CLAIMS = [
     ("coloured outlines survive the current ink rule", claim_saturated_ink_survives),
     ("the ink cutoff is image-specific, not a constant", claim_cutoff_adapts),
     ("thinning erases the 2x2 block and nothing else", claim_only_2x2_vanishes),
-    ("line width is monotonic in every style", claim_line_width_monotonic),
+    ("line width both orders and actually moves the ink", claim_line_width_moves_the_ink),
     ("--ink affects Cartoon only", claim_ink_only_touches_cartoon),
 ]
 

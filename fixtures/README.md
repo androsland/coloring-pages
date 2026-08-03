@@ -26,6 +26,32 @@ python3 fixtures/make_fixtures.py             # redraw the PNGs (they are commit
 `baseline.json`. When a change is meant to move the numbers, re-record the
 baseline in the same commit and say why they moved.
 
+Every render goes through `coloringify.convert()` — the same dispatch the CLI
+uses — rather than calling the style functions directly. An earlier version did
+its own branching here, which quietly turned one claim into a tautology: it
+compared two outputs this file had already routed identically, so it was testing
+itself. It also meant nothing exercised `convert()`, which is where a regression
+in argument routing would actually live.
+
+## Falsifying the claims
+
+Each claim has been run against a build broken in the specific way that claim
+exists to catch, and each one fails there:
+
+| claim | broken build it was checked against |
+|---|---|
+| coloured outlines survive | the old fixed `V < 120 && S < 60` rule |
+| the cutoff is image-specific | `ink_cutoff` pinned to a constant 120 |
+| thinning erases only the 2x2 | plain erosion in place of Zhang-Suen |
+| line width moves the ink | a no-op `set_line_width` |
+| `--ink` affects Cartoon only | `--ink` leaked into the Bold path inside `convert()` |
+
+Two of these were added *because* the original versions passed against a broken
+build. The line-width claim tested ordering only, and a slider that does nothing
+produces a flat sequence, which is trivially non-decreasing. If you add a claim,
+break the code on purpose and watch it fail before you trust it — a check that
+has never failed has never been tested.
+
 ## What each fixture is for
 
 | fixture | the claim it holds the code to |
