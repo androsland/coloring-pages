@@ -84,6 +84,12 @@ Stated plainly, because an unlisted limit reads as coverage.
   `no_reference=True` so the ink percentages measure the outline rather than the
   thumbnail's pixels. `add_reference()` is therefore untested — it could break
   and every claim here would still pass.
+- **Nothing here is spatial.** Every claim except the 2x2 one measures a
+  percentage of inked pixels, never *which* pixels. A `set_line_width` that hit
+  the right coverage by flipping pixels unrelated to any stroke would pass
+  cleanly, and no threshold can catch that — it needs a claim that checks the
+  changed pixels sit adjacent to existing ink. `claim_only_2x2_vanishes` is the
+  single exception, and it only inspects six known coordinates.
 - **Nothing about `Thin`.** Canny's doubled outline on already-inked art is a
   known, documented limitation that is not being fixed, so there is no claim to
   hold it to.

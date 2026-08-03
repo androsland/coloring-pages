@@ -152,10 +152,11 @@ def claim_line_width_moves_the_ink(data):
     direction is now bounded on its own. Thinning is the half that matters most:
     it is the Zhang-Suen path the 2x2 claim depends on."""
     widths = (-3, -2, -1, 0, 1, 2, 3)
+    zero = widths.index(0)
     bad, thins, thicks = [], [], []
     for name in NAMES:
         seq = [data[name]["line_width"][str(w)] for w in widths]
-        normal = seq[widths.index(0)]
+        normal = seq[zero]
         thin_delta, thick_delta = normal - seq[0], seq[-1] - normal
         thins.append(thin_delta)
         thicks.append(thick_delta)
@@ -165,8 +166,22 @@ def claim_line_width_moves_the_ink(data):
             bad.append(f"{name}: thinning barely moves, {normal} -> {seq[0]}")
         elif thick_delta < MIN_DELTA_PP:
             bad.append(f"{name}: thickening barely moves, {normal} -> {seq[-1]}")
+        # Magnitude has to matter, not just direction. A set_line_width that
+        # collapses every negative width to -1 and every positive to +1 clears
+        # both deltas above — on one fixture by 0.05pp, i.e. by luck of that
+        # image's geometry rather than by the check working. Counting distinct
+        # settings per side catches it without depending on any threshold.
+        # Not "strictly increasing at every step": thinning legitimately
+        # converges (flat-bands reads 2.74 at both -3 and -2, because Zhang-Suen
+        # reaches a skeleton and further rounds correctly do nothing), so that
+        # stricter form would fail the healthy build.
+        elif len(set(seq[:zero])) < 2:
+            bad.append(f"{name}: thinning ignores magnitude, {seq[:zero]}")
+        elif len(set(seq[zero + 1:])) < 2:
+            bad.append(f"{name}: thickening ignores magnitude, {seq[zero + 1:]}")
     return not bad, (f"monotonic everywhere; smallest thinning {min(thins):.2f}pp, "
-                     f"smallest thickening {min(thicks):.2f}pp (floor {MIN_DELTA_PP}pp each)"
+                     f"smallest thickening {min(thicks):.2f}pp (floor {MIN_DELTA_PP}pp "
+                     f"each); magnitude distinguishable on both sides"
                      if not bad else "; ".join(bad))
 
 
