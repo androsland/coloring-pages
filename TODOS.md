@@ -168,6 +168,14 @@
   across builds before, so parity could start failing for reasons that have
   nothing to do with this repository. `parity.py` prints both versions and warns
   when they differ so a failure can be triaged, but nothing holds them together.
+  No longer hypothetical — the first CI run (PR #5, 2026-08-04) resolved
+  `opencv-python>=4.8` to **5.0.0.93** on the runner, against **4.13.0** locally
+  and **4.13.0** in the browser from the CDN. So CI's green currently reports on
+  a different OpenCV major version than any developer machine. Everything still
+  agreed: 147/147 maths cells, 15/15 wiring steps, and `baseline.json`'s exact
+  float equality held across the 4 -> 5 boundary. That is luck rather than
+  design, and it is the last cheap warning this will give. The `WARN` fired
+  correctly and named the cause, which is the part that worked.
   Same root cause as the `baseline.json` item below. Sharper since 2026-08-04:
   parity now runs on every push, so a CDN-side release turns CI red on a commit
   that changed nothing, and the first red build after a bump is the one that
