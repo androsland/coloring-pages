@@ -122,6 +122,16 @@ through it, and compares the result to `coloringify.convert()` **pixel for
 pixel**. Not a tolerance, not a percentage: equal, or it fails and names the
 cell. Two passes, because they fail in different ways.
 
+The server answers for `/docs/` and `/fixtures/` and 404s everything else, so
+`in/` — your own pictures, gitignored on purpose — along with `.git/` and
+`.gstack/` are never on that port. The allowlist is checked at startup rather
+than trusted: `check_server_scope()` asks the running server for twelve paths it
+must refuse, including `/docs/../.git/config`, and refuses to run if any is
+served. That traversal is the reason the check tests the resolved path rather
+than the requested one — `SimpleHTTPRequestHandler` collapses `..` before it
+filters, so the naive version passes a `startswith("/docs/")` test and then
+hands over the file.
+
 **maths** — 147 cells: every fixture through all three styles, all seven line
 widths, all seven ink levels, three Detail settings, and speck removal alone and
 combined with a line width in each direction. The first three sweeps mirror

@@ -50,11 +50,14 @@ together, and this pass would be silent.
 import argparse
 import base64
 import functools
+import http.client
 import http.server
+import posixpath
 import re
 import socketserver
 import sys
 import threading
+import urllib.parse
 from collections import namedtuple
 from pathlib import Path
 
@@ -152,13 +155,44 @@ def matrix():
 
 # ---- the local server ----------------------------------------------------
 
+# The only two prefixes the page or the harness ever asks for. An allowlist
+# rather than a denylist: the repository root also holds `in/` (the user's own
+# source pictures, gitignored precisely because they are personal or
+# copyrighted), `.git/`, and `.gstack/`, which contains a live local agent
+# token. A denylist has to name all of those and stay right as the repo grows;
+# this cannot be wrong about a directory nobody has created yet.
+SERVED_PREFIXES = ("/docs/", "/fixtures/")
+
+
 class _Handler(http.server.SimpleHTTPRequestHandler):
-    """Serves the repository, plus one in-memory page for --falsify."""
+    """Serves docs/ and fixtures/ only, plus one in-memory page for --falsify."""
 
     mutant_html = None
 
+    def _resolved_path(self) -> str:
+        """The path this request will actually reach, with `..` collapsed.
+
+        Testing `self.path` as it arrives is not enough. SimpleHTTPRequestHandler
+        runs posixpath.normpath *before* it drops `..` components, so
+        `/docs/../.git/config` resolves to `<root>/.git/config` on the filesystem
+        while still passing a startswith("/docs/") test on the raw string. Collapse
+        it here so the allowlist sees the same path the filesystem will.
+        """
+        raw = urllib.parse.urlsplit(self.path).path
+        return posixpath.normpath(urllib.parse.unquote(raw))
+
+    def send_head(self):
+        # The one choke point both do_GET and do_HEAD funnel through, so the
+        # allowlist cannot be walked around with a different method. normpath
+        # strips a trailing slash, so "/docs/" and "/" fail the prefix test too:
+        # no directory listings.
+        if not self._resolved_path().startswith(SERVED_PREFIXES):
+            self.send_error(404, "Not served")
+            return None
+        return super().send_head()
+
     def do_GET(self):
-        if self.path.split("?")[0] == MUTANT_PATH:
+        if self._resolved_path() == MUTANT_PATH:
             body = (_Handler.mutant_html or "").encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -180,16 +214,78 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 
 
 def serve(root: Path):
-    """The whole repository, on a loopback-only ephemeral port, for the length
-    of the run. Root rather than docs/ because the page is at /docs/index.html
-    and the fixtures at /fixtures/ — but that does mean `in/` is readable by
-    anything else on the machine while this runs, and `in/` is where the
-    copyrighted source pictures live. Loopback and a few seconds, not nothing."""
+    """Loopback-only, on an ephemeral port, for the length of the run.
+
+    Rooted at the repository because the page lives at /docs/index.html and the
+    fixtures at /fixtures/, but SERVED_PREFIXES is what decides: everything else
+    under the root is 404, so `in/`, `.git/` and `.gstack/` are never reachable.
+    An earlier version served the whole tree and said so in a comment, on the
+    reasoning that loopback and a few seconds is a small window. It is a window
+    that costs nothing to close — the harness never requests anything outside
+    those two prefixes — and `.gstack/` holds a live local agent token, which the
+    comment did not account for. check_server_scope() proves the allowlist holds
+    rather than trusting this docstring.
+    """
     handler = functools.partial(_Handler, directory=str(root))
     httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
     httpd.daemon_threads = True
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd, httpd.server_address[1]
+
+
+# Paths that must never be served, and the two that must. Sent verbatim over
+# http.client rather than urllib, which would helpfully collapse the traversal
+# cases client-side and turn them into a test of nothing.
+#
+# `/in/` and `/.gstack/browse.json` only exist on a machine that has used either,
+# so on a fresh clone they would 404 whatever the allowlist did. They are here
+# because they name the actual stakes, not because they carry the check —
+# `/.git/config`, `/coloringify.py` and both traversal forms exist in every
+# checkout, so this cannot pass vacuously.
+MUST_404 = ("/", "/docs/", "/fixtures/", "/.git/config", "/.gstack/browse.json",
+            "/in/", "/requirements.txt", "/coloringify.py",
+            "/docs/../.git/config", "/fixtures/../.gstack/browse.json",
+            "/docs/%2e%2e/.git/config", "//.git/config")
+MUST_200 = ("/docs/index.html", "/fixtures/grey-ink.png")
+
+
+def check_server_scope(port: int):
+    """Ask the running server for the things it must refuse. Returns what leaked.
+
+    A guard nobody has watched fail is a guard nobody has tested, and the
+    traversal cases are the reason this is a request rather than an assertion
+    about a string: `/docs/../.git/config` walks straight through a naive
+    startswith() on the raw path, and it is the shape a reviewer would use.
+    """
+    bad = []
+
+    def status(path):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            conn.request("GET", path)
+            r = conn.getresponse()
+            r.read()
+            return r.status
+        finally:
+            conn.close()
+
+    for p in MUST_404:
+        try:
+            code = status(p)
+        except Exception as e:
+            bad.append(f"{p} raised {type(e).__name__}")
+            continue
+        if code != 404:
+            bad.append(f"{p} answered {code}, expected 404")
+    for p in MUST_200:
+        try:
+            code = status(p)
+        except Exception as e:
+            bad.append(f"{p} raised {type(e).__name__}")
+            continue
+        if code != 200:
+            bad.append(f"{p} answered {code}, expected 200")
+    return bad
 
 
 # ---- talking to the page -------------------------------------------------
@@ -686,6 +782,14 @@ def main():
     httpd, port = serve(ROOT)
     errors = []
     try:
+        leaked = check_server_scope(port)
+        if leaked:
+            print("The harness server is serving more than docs/ and fixtures/, "
+                  "which puts `in/`,\n.git/ and .gstack/ on a local port. Refusing "
+                  "to run:", file=sys.stderr)
+            for line in leaked:
+                print(f"  {line}", file=sys.stderr)
+            return 2
         with sync_playwright() as pw:
             try:
                 browser = pw.chromium.launch()
