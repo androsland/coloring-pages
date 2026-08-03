@@ -487,10 +487,11 @@ const DESPECKLE_MIN_AREA = 12;
 // Cartoon (lineart) ink coverage: what percentage of the picture to keep as
 // ink. The brightness cutoff behind it is measured from each image rather than
 // fixed, because "dark enough to be an outline" varies hugely between pictures
-// — on the four cartoon images this was tuned against, the same 4% target
-// resolved to cutoffs anywhere from 21 to 229. A fixed cutoff is what made this
-// style unusable on half of them. (Those images are not in the repo; `in/` is
-// gitignored so nobody commits copyrighted source pictures.)
+// — across the committed fixtures the same 4% target resolves to cutoffs from
+// 21 to 237. A fixed cutoff is what made this style unusable on half the art it
+// was pointed at. `python3 fixtures/report.py` re-derives that number and fails
+// if it moves, but it measures coloringify.py — the Python twin of this file.
+// Nothing checks that these two implementations still agree; see TODOS.md.
 // The top of the range is well past useful for ordinary cartoon art — most
 // pictures are a solid black rectangle long before 100% — but it is the script's
 // range too, and where the ceiling actually falls depends on the picture. A

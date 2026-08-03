@@ -34,14 +34,16 @@
   differently from one cut out on white. Every image it was tuned against was
   cut out on white, so the full-bleed case is untested. (2026-08-02)
 
-- **The tuning sample is not reproducible from a clean checkout.** Both new
-  controls were tuned against four images in `in/`, which is gitignored on
-  purpose (don't commit copyrighted pictures). So the specific numbers quoted in
-  the README and in the source comments cannot be re-derived by anyone else, and
-  a future change to either heuristic has no fixture set to regress against.
-  Worth adding two or three small, freely-licensed cartoon images as a tracked
-  fixture directory (`fixtures/`, separate from `in/`) plus a script that prints
-  the ink coverage per style, so these claims become checkable. (2026-08-02)
+- **Nothing checks that the browser and the script still agree.** `fixtures/`
+  now regresses `coloringify.py`, but `docs/index.html` re-implements the same
+  histogram cutoff and the same Zhang-Suen thinning in JavaScript, and the two
+  have only ever been reconciled by hand — most recently at 54/54 byte-identical
+  cells, which is exactly the kind of result that rots silently. This is the
+  largest remaining verification gap, and it is bigger than the one the fixtures
+  just closed: a divergence means the page you preview is not the page the batch
+  script produces. Closing it needs the browser driven headlessly against the
+  same fixtures (Playwright is not currently a repo dependency), or the shared
+  maths extracted to one file both sides load. (2026-08-03)
 
 - **Cartoon's ink target quantises on images with large flat regions.** The
   cutoff is an integer V, so where many pixels share one brightness the achieved
@@ -133,6 +135,17 @@
   so it was left out of that diff rather than padding it. (2026-08-02)
 
 ## Completed
+
+- **The tuning claims could not be re-derived by anyone else.** Both heuristics
+  were tuned against copyrighted art in the gitignored `in/`, so every number in
+  the README and the source comments was unverifiable from a clean checkout, and
+  neither had anything to regress against. Added `fixtures/`: six images drawn by
+  code (no licence question), each built to exercise one documented claim, plus
+  `report.py`, which prints coverage per style and fails if a claim breaks or a
+  number drifts from `baseline.json`. The claims were checked against
+  deliberately broken builds — the old fixed-threshold rule and plain erosion in
+  place of Zhang-Suen — and both are caught. Blind spots are written into
+  `fixtures/README.md` rather than left implied. (2026-08-03)
 
 - **`Cartoon` was dead weight: fixed HSV thresholds (`V < 120 && S < 60`) that
   suited almost nothing.** The saturation test assumed ink is grey and fills are
