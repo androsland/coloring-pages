@@ -1,0 +1,11 @@
+# Only fixtures/parity.py needs anything in here. coloringify.py and
+# fixtures/report.py run on requirements.txt alone, deliberately: the regression
+# net should not be the thing that is skipped because installing it is a chore.
+#
+# Verified on playwright 1.62.1 and the Chromium it installs. Older versions are
+# untested rather than known-bad — no floor is claimed here because none has been
+# measured.
+playwright
+
+# After installing, fetch the browser itself (it does not come from pip):
+#   python3 -m playwright install chromium

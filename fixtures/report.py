@@ -14,8 +14,10 @@ Two jobs:
     python3 fixtures/report.py --update-baseline  # accept current numbers
 
 Covers coloringify.py only. The browser build in docs/index.html re-implements
-the same maths and is verified against this one by hand; there is no in-repo
-check that the two still agree. See TODOS.md.
+the same maths; `fixtures/parity.py` is what holds the two together, driving the
+real page over this same sweep and failing if a single pixel differs. It needs
+Playwright and network access, which is why it is a separate script — this one
+runs on nothing but requirements.txt.
 """
 
 import argparse
@@ -93,7 +95,7 @@ def ink_pct(binary):
     return round(float((binary == 0).mean()) * 100, 2)
 
 
-def page(name, style, ink=4.0, line_width=0):
+def page(name, style, ink=4.0, line_width=0, detail=5, despeckle=False):
     """Render a fixture through the CLI's own dispatch, with one deviation.
 
     Goes through `convert()` rather than calling to_threshold / to_edges /
@@ -108,11 +110,17 @@ def page(name, style, ink=4.0, line_width=0):
     outline instead of the thumbnail's pixels, but it means `add_reference()` is
     never exercised here and no claim would notice it breaking. Every other field
     matches main()'s real defaults.
+
+    `detail` (the CLI's `--c`) and `despeckle` default to the CLI's own defaults,
+    so every claim in this file renders exactly what it did before they became
+    parameters. They exist for parity.py, which sweeps both against the browser
+    and needs one place where the Namespace is built — a second copy of these
+    defaults is a second thing to drift.
     """
     args = argparse.Namespace(
-        block_size=9, c=5, canny_low=50, canny_high=150,
+        block_size=9, c=detail, canny_low=50, canny_high=150,
         ink=ink, line_width=line_width,
-        despeckle=False, min_area=12,
+        despeckle=despeckle, min_area=12,
         no_reference=True, ref_scale=0.25, ref_margin=15,
     )
     return convert(FIX / f"{name}.png", style, args)

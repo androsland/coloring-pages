@@ -37,17 +37,6 @@
   sensitivity itself is intended and stays. (2026-08-02, fixture added
   2026-08-03)
 
-- **Nothing checks that the browser and the script still agree.** `fixtures/`
-  now regresses `coloringify.py`, but `docs/index.html` re-implements the same
-  histogram cutoff and the same Zhang-Suen thinning in JavaScript, and the two
-  have only ever been reconciled by hand — most recently at 54/54 byte-identical
-  cells, which is exactly the kind of result that rots silently. This is the
-  largest remaining verification gap, and it is bigger than the one the fixtures
-  just closed: a divergence means the page you preview is not the page the batch
-  script produces. Closing it needs the browser driven headlessly against the
-  same fixtures (Playwright is not currently a repo dependency), or the shared
-  maths extracted to one file both sides load. (2026-08-03)
-
 - **Cartoon's ink target quantises on images with large flat regions.** The
   cutoff is an integer V, so where many pixels share one brightness the achieved
   coverage jumps. Originally observed on `0007.png`, which is in the gitignored
@@ -136,11 +125,48 @@
 
 ## Fixtures and regression checks
 
-- **Nothing runs `fixtures/report.py` automatically.** There is no CI in this
-  repo at all, so the whole regression net only fires when someone remembers to
-  run it by hand. Every claim in `fixtures/` is worth exactly as much as that
-  habit. A single workflow running `python3 fixtures/report.py` on push would
-  close it. (security review, 2026-08-03)
+- **Nothing runs `fixtures/report.py` or `fixtures/parity.py` automatically.**
+  There is no CI in this repo at all, so the whole regression net only fires
+  when someone remembers to run it by hand. Every claim in `fixtures/` is worth
+  exactly as much as that habit, and parity is worth less than that — it is the
+  check most likely to be skipped, because it is the one with dependencies to
+  install. A workflow running `python3 fixtures/report.py` on push would close
+  half of it; adding `parity.py` needs `requirements-dev.txt`, `python3 -m
+  playwright install chromium`, and network egress to the OpenCV CDN in the
+  runner. (security review, 2026-08-03; parity added 2026-08-03)
+
+- **The colour guide is the one thing the two twins genuinely draw
+  differently.** `parity.py` renders with the guide off and says so, because
+  with it on they disagree: measured at 4.91% of pixels on `grey-ink`, 5.81% on
+  `saturated-ink` and 8.20% on `full-bleed`, every differing pixel inside the
+  inset's bounding box and none outside it. Three causes, all in the geometry
+  rather than the picture: the script's margin is a fixed 15px where the browser
+  uses `round(W * 0.015) + 6` (10px at fixture width), the thumbnail size is
+  truncated in Python and rounded in JS, and the frame is a `cv2.rectangle`
+  offset by a pixel against a `strokeRect` centred on its path. Fixing it means picking
+  which one is right, and they are not obviously commensurable — the browser's
+  margin scales with the page and it also offers `Above image`, which the CLI
+  has no flag for. Deliberately left alone; the point of recording it is that
+  "parity passes" must not be read as "the guide matches". (2026-08-03)
+
+- **Neither side pins the OpenCV that runs the maths.** `requirements.txt` pins
+  `opencv-python>=4.8` and the page loads
+  `https://docs.opencv.org/4.x/opencv.js`, which redirects to whatever the
+  latest release is — 4.13.0 on 2026-08-03, matching the locally installed
+  build, which is luck rather than design. The two can drift apart without a
+  commit on either side, and OpenCV's SIMD paths have differed numerically
+  across builds before, so parity could start failing for reasons that have
+  nothing to do with this repository. `parity.py` prints both versions and warns
+  when they differ so a failure can be triaged, but nothing holds them together.
+  Same root cause as the `baseline.json` item below. (2026-08-03)
+
+- **The transparency path is untested on both sides.** `load_bgr()` composites
+  alpha over white and `makeColoringPage` does the same by drawing onto a
+  white-filled canvas; every committed fixture is opaque, so neither the
+  fixtures nor parity exercises either one. Both could be broken, or broken
+  differently, and nothing here would notice. Needs a fixture with an alpha
+  channel — which also means a baseline entry and a claim about what
+  compositing should produce. (2026-08-03)
 
 - **`baseline.json` is exact-equality against an unpinned OpenCV.**
   `requirements.txt` pins `opencv-python>=4.8` with no ceiling and no lockfile,
@@ -173,6 +199,27 @@
   so it was left out of that diff rather than padding it. (2026-08-02)
 
 ## Completed
+
+- **Nothing checked that the browser and the script still agree.** `docs/index.html`
+  re-implements the histogram cutoff and the Zhang-Suen thinning in JavaScript,
+  and the two had only ever been reconciled by hand — most recently at 54/54
+  byte-identical cells, which is exactly the kind of result that rots silently.
+  Added `fixtures/parity.py`: it serves the repo over loopback, opens the real
+  page in headless Chromium with the real opencv.js, renders the committed
+  fixtures through it and compares them to `coloringify.convert()` pixel for
+  pixel — 147 cells across every style, line width, ink level, Detail setting and
+  speck-removal combination, plus 15 steps that drive the actual controls with
+  real key presses, clicks and typed values, because a slider wired to the wrong
+  field renders perfectly and the maths pass cannot see it. All 162 agree exactly
+  today. `--falsify` applies 33 deliberate defects to a copy of the page held in
+  memory and checks parity notices; it also gates its own coverage, failing if
+  the set of defects it cannot see differs from `KNOWN_BLIND` in either
+  direction. The first battery found three misses: two were weak probes and were
+  fixed (the speck-ordering cell used a negative line width, where the two
+  orderings genuinely agree; the typed-value steps used `Ink` values sitting in a
+  flat stretch of `grey-ink`'s histogram), and one is a real limit of the fixture
+  set, recorded above and in `fixtures/README.md`. The colour-guide inset is
+  excluded, and measurably differs — see the open item above. (2026-08-03)
 
 - **The tuning claims could not be re-derived by anyone else.** Both heuristics
   were tuned against copyrighted art in the gitignored `in/`, so every number in

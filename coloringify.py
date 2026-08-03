@@ -52,7 +52,8 @@ def ink_cutoff(v, pct: float) -> int:
 
     Returns 1..255 — never 0, or a picture containing a pure-black region would
     come back completely blank. Mirrors inkCutoff() in docs/index.html; the two
-    must agree bin for bin.
+    must agree bin for bin, which `python3 fixtures/parity.py` checks by running
+    both against the committed fixtures and comparing every pixel.
     """
     below = np.cumsum(np.bincount(v.ravel(), minlength=256))  # below[i] = count(V <= i)
     want = v.size * pct / 100.0
