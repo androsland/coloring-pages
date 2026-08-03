@@ -44,14 +44,20 @@ def ink_pct(binary):
 
 
 def page(name, style, ink=4.0, line_width=0):
-    """Render a fixture the way the CLI does.
+    """Render a fixture through the CLI's own dispatch, with one deviation.
 
-    Deliberately goes through `convert()` rather than calling to_threshold /
-    to_edges / to_lineart directly. An earlier version reimplemented that
-    branching here, which made one claim a tautology — it compared two outputs
-    this file had already routed identically, so it was testing the test. Worse,
-    nothing then exercised `convert()`'s own dispatch, where a regression that
-    leaked --ink into Bold would actually live.
+    Goes through `convert()` rather than calling to_threshold / to_edges /
+    to_lineart directly. An earlier version reimplemented that branching here,
+    which made one claim a tautology — it compared two outputs this file had
+    already routed identically, so it was testing the test. Worse, nothing then
+    exercised `convert()`'s own dispatch, where a regression that leaked --ink
+    into Bold would actually live.
+
+    The deviation: `no_reference=True`, where the CLI defaults to False and does
+    paste the colour thumbnail. That keeps the ink percentages measuring the
+    outline instead of the thumbnail's pixels, but it means `add_reference()` is
+    never exercised here and no claim would notice it breaking. Every other field
+    matches main()'s real defaults.
     """
     args = argparse.Namespace(
         block_size=9, c=5, canny_low=50, canny_high=150,
@@ -131,22 +137,36 @@ def claim_only_2x2_vanishes(_data):
     return ok, "; ".join(notes)
 
 
-def claim_line_width_moves_the_ink(data):
-    """The slider has to actually mean something: never less ink as it rises, AND
-    a real spread end to end.
+MIN_DELTA_PP = 2.0   # observed minima are 4.13 (thinning) and 6.03 (thickening)
 
-    The ordering test alone is not enough — a slider that does nothing produces a
-    flat sequence, which is trivially non-decreasing. That is not hypothetical:
-    this claim shipped ordering-only and passed against a no-op set_line_width."""
-    bad = []
+
+def claim_line_width_moves_the_ink(data):
+    """The slider has to actually mean something in *both* directions: never less
+    ink as it rises, and a real change either side of Normal.
+
+    Two hollow versions of this claim have already shipped, each defeated by the
+    thing it did not measure. Ordering alone passed against a no-op slider, since
+    a flat sequence is trivially non-decreasing. Ordering plus a combined
+    end-to-end spread then passed against a slider that thickened but never
+    thinned — the working half carried the broken half over the bar. So each
+    direction is now bounded on its own. Thinning is the half that matters most:
+    it is the Zhang-Suen path the 2x2 claim depends on."""
+    widths = (-3, -2, -1, 0, 1, 2, 3)
+    bad, thins, thicks = [], [], []
     for name in NAMES:
-        seq = [data[name]["line_width"][str(w)] for w in (-3, -2, -1, 0, 1, 2, 3)]
+        seq = [data[name]["line_width"][str(w)] for w in widths]
+        normal = seq[widths.index(0)]
+        thin_delta, thick_delta = normal - seq[0], seq[-1] - normal
+        thins.append(thin_delta)
+        thicks.append(thick_delta)
         if any(b < a for a, b in zip(seq, seq[1:])):
             bad.append(f"{name}: not monotonic {seq}")
-        elif seq[-1] - seq[0] < 2.0:
-            bad.append(f"{name}: barely moves, {seq[0]} -> {seq[-1]}")
-    spread = min(data[n]["line_width"]["3"] - data[n]["line_width"]["-3"] for n in NAMES)
-    return not bad, (f"monotonic everywhere, smallest end-to-end spread {spread:.2f}pp"
+        elif thin_delta < MIN_DELTA_PP:
+            bad.append(f"{name}: thinning barely moves, {normal} -> {seq[0]}")
+        elif thick_delta < MIN_DELTA_PP:
+            bad.append(f"{name}: thickening barely moves, {normal} -> {seq[-1]}")
+    return not bad, (f"monotonic everywhere; smallest thinning {min(thins):.2f}pp, "
+                     f"smallest thickening {min(thicks):.2f}pp (floor {MIN_DELTA_PP}pp each)"
                      if not bad else "; ".join(bad))
 
 

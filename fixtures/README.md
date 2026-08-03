@@ -80,6 +80,10 @@ Stated plainly, because an unlisted limit reads as coverage.
   been verified by hand. This is the largest remaining gap; see `TODOS.md`.
 - **Small (240x180).** Nothing here exercises memory, the synchronous
   main-thread cost, or the pixel-count behaviour that a 48MP photo would.
+- **The colour-reference thumbnail is never drawn.** `page()` passes
+  `no_reference=True` so the ink percentages measure the outline rather than the
+  thumbnail's pixels. `add_reference()` is therefore untested — it could break
+  and every claim here would still pass.
 - **Nothing about `Thin`.** Canny's doubled outline on already-inked art is a
   known, documented limitation that is not being fixed, so there is no claim to
   hold it to.
