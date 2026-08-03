@@ -52,6 +52,7 @@ import base64
 import functools
 import http.client
 import http.server
+import os
 import posixpath
 import re
 import socketserver
@@ -183,10 +184,21 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
 
     def send_head(self):
         # The one choke point both do_GET and do_HEAD funnel through, so the
-        # allowlist cannot be walked around with a different method. normpath
-        # strips a trailing slash, so "/docs/" and "/" fail the prefix test too:
-        # no directory listings.
-        if not self._resolved_path().startswith(SERVED_PREFIXES):
+        # allowlist cannot be walked around with a different method.
+        path = self._resolved_path()
+        # A null byte survives normpath and the prefix test — /docs/index.html%00.git
+        # is still under /docs/ — and then reaches the stdlib's open(), which raises
+        # ValueError and takes the handler thread down with it. Nothing leaks, but
+        # an unhandled crash in the one function that exists to be trustworthy is
+        # not a good look. Refuse it here.
+        if "\x00" in path or not path.startswith(SERVED_PREFIXES):
+            self.send_error(404, "Not served")
+            return None
+        # No directory listings, ever. normpath strips the trailing slash, so "/"
+        # and "/docs/" already fail the prefix test — but a directory *inside* an
+        # allowed prefix does not, and fixtures/__pycache__/ was listing 631 bytes
+        # of build artefacts. The harness only ever asks for files.
+        if os.path.isdir(self.translate_path(self.path)):
             self.send_error(404, "Not served")
             return None
         return super().send_head()
@@ -245,7 +257,16 @@ def serve(root: Path):
 MUST_404 = ("/", "/docs/", "/fixtures/", "/.git/config", "/.gstack/browse.json",
             "/in/", "/requirements.txt", "/coloringify.py",
             "/docs/../.git/config", "/fixtures/../.gstack/browse.json",
-            "/docs/%2e%2e/.git/config", "//.git/config")
+            "/docs/%2e%2e/.git/config", "//.git/config",
+            # Null byte: passes the prefix test and used to crash the handler
+            # thread inside the stdlib's open(). status() reports a dropped
+            # connection as a leak, so a regression here fails loudly.
+            "/docs/index.html%00.git", "/fixtures/grey-ink.png%00x",
+            # A directory inside an allowed prefix. __pycache__ is the only one
+            # that reliably exists, because importing report.py writes it — so
+            # under PYTHONDONTWRITEBYTECODE this single entry passes vacuously
+            # while every other one still carries the check.
+            "/fixtures/__pycache__/", "/fixtures/__pycache__")
 MUST_200 = ("/docs/index.html", "/fixtures/grey-ink.png")
 
 

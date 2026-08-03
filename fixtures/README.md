@@ -124,13 +124,25 @@ cell. Two passes, because they fail in different ways.
 
 The server answers for `/docs/` and `/fixtures/` and 404s everything else, so
 `in/` — your own pictures, gitignored on purpose — along with `.git/` and
-`.gstack/` are never on that port. The allowlist is checked at startup rather
-than trusted: `check_server_scope()` asks the running server for twelve paths it
-must refuse, including `/docs/../.git/config`, and refuses to run if any is
-served. That traversal is the reason the check tests the resolved path rather
-than the requested one — `SimpleHTTPRequestHandler` collapses `..` before it
-filters, so the naive version passes a `startswith("/docs/")` test and then
-hands over the file.
+`.gstack/` are never on that port. No directories either, at any depth. The
+allowlist is checked at startup rather than trusted: `check_server_scope()` asks
+the running server for sixteen paths it must refuse and two it must serve, and
+refuses to run if any of them answers wrong.
+
+Three of those sixteen are there because the obvious guard lets them through,
+and each one did:
+
+- `/docs/../.git/config` — `SimpleHTTPRequestHandler` collapses `..` *before* it
+  filters components, so a `startswith("/docs/")` test on the requested path
+  passes and then hands over `.git/config`. The check runs on the resolved path
+  for exactly this reason.
+- `/docs/index.html%00.git` — a null byte survives both normpath and the prefix
+  test, then reaches the stdlib's `open()`, which raises `ValueError` and takes
+  the handler thread with it. Nothing leaked, but an unhandled crash in the one
+  function whose job is to be trustworthy is worth closing.
+- `/fixtures/__pycache__/` — a directory *inside* an allowed prefix still listed,
+  631 bytes of build artefacts. The prefix rule only kills `/` and `/docs/`,
+  because normpath strips their trailing slash.
 
 **maths** — 147 cells: every fixture through all three styles, all seven line
 widths, all seven ink levels, three Detail settings, and speck removal alone and
