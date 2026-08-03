@@ -124,6 +124,23 @@ cover.
 so nobody commits copyrighted pictures. The fixtures exist because those numbers
 were otherwise impossible to re-derive.)
 
+The website is not a separate tool with similar behaviour — it is the same
+pipeline written twice, and the two are checked against each other:
+
+```bash
+pip install -r requirements-dev.txt
+python3 -m playwright install chromium
+python3 fixtures/parity.py
+```
+
+That drives `docs/index.html` in headless Chromium against the same fixtures,
+across every style, line width, ink level, Detail setting and speck-removal
+combination, and fails if a single pixel differs from what `coloringify.py`
+produces. It drives the actual
+controls too, so a slider wired to the wrong setting is caught as well as a
+formula that drifted. The one part deliberately excluded is the colour-guide
+inset, which the two genuinely place differently — see `fixtures/README.md`.
+
 Line width (works with any style, `0` = leave the style's own stroke alone):
 
 - `--line-width -3 … 3`: how heavy the finished outline is. Negative peels

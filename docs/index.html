@@ -491,7 +491,9 @@ const DESPECKLE_MIN_AREA = 12;
 // 10 to 237. A fixed cutoff is what made this style unusable on half the art it
 // was pointed at. `python3 fixtures/report.py` re-derives that number and fails
 // if it moves, but it measures coloringify.py — the Python twin of this file.
-// Nothing checks that these two implementations still agree; see TODOS.md.
+// `python3 fixtures/parity.py` is what checks the two still agree: it drives
+// this page in headless Chromium against the same fixtures and fails on a
+// single differing pixel. Run it after touching anything below.
 // The top of the range is well past useful for ordinary cartoon art — most
 // pictures are a solid black rectangle long before 100% — but it is the script's
 // range too, and where the ceiling actually falls depends on the picture. A
