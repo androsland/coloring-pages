@@ -33,6 +33,15 @@ see "Checking the browser twin" below.
 `baseline.json`. When a change is meant to move the numbers, re-record the
 baseline in the same commit and say why they moved.
 
+All four gate, so all four run in CI, split by what makes them fail rather than
+by how long they take. `.github/workflows/checks.yml` runs `report.py` and
+`parity.py` on every push and pull request — those break when the pipeline
+changes. `.github/workflows/mutations.yml` runs `falsify.py` and `parity.py
+--falsify` weekly and on demand — those break when the *checking* changes, which
+is rarer, and the second of them is ~19 minutes. Nothing runs in CI that cannot
+fail; a green job that could never have been red is worse than no job, because
+it reads as coverage.
+
 Every render goes through `coloringify.convert()` — the same dispatch the CLI
 uses — rather than calling the style functions directly. An earlier version did
 its own branching here, which quietly turned one claim into a tautology: it
@@ -48,6 +57,13 @@ rather than described: it applies 27 deliberate defects one at a time in a
 temporary copy of the tree and reports which claims fire. 26 are caught. Run it
 and the table below re-derives itself; a table nobody can re-derive is the exact
 thing this directory exists to stop.
+
+It gates on that count rather than printing it, on the same rule as `--falsify`
+below: the run fails when the set of defects it cannot catch differs from
+`KNOWN_BLIND` in either direction. One entry is listed today, `despeckle ignores
+its flag`, with the measurement that says why. Printing the misses and trusting
+whoever is reading to check them against this file works only while someone is
+reading, which is not the case on the schedule that now runs it.
 
 | claim | broken build it was checked against |
 |---|---|
@@ -284,7 +300,10 @@ Stated plainly, because an unlisted limit reads as coverage.
 - **`--despeckle` is never exercised.** `page()` always passes `despeckle=False`,
   so `despeckle()` could stop honouring its flag — or stop working entirely — and
   every claim here would still pass. Verified: making despeckle unconditional in
-  `convert()` breaks no claim.
+  `convert()` breaks no claim. That is the one entry in `falsify.py`'s
+  `KNOWN_BLIND`, so the gap is held open by a failing run rather than by this
+  sentence — close it and the list has to lose the entry, or `falsify.py` fails
+  for overstating what it cannot see.
 - **`ink-ramp` takes no part in the line-width claims.** A smooth gradient has no
   edges for adaptive threshold to find, so it reads 0.00% ink at every width and
   there is no stroke to thin. It is the only fixture excluded from anything, and
