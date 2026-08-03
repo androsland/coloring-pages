@@ -99,15 +99,30 @@ Lineart tuning:
   the frame with no white background needs far more than one cut out on white.
 
 The brightness cutoff behind that percentage is measured from each image, not
-fixed — on the four cartoon images this was tuned against, the same `--ink 4`
-resolved to cutoffs anywhere from 21 to 229. That is the whole point: "dark
-enough to be an outline" is not a constant, and the previous fixed pair of
-thresholds produced a near-blank page on art whose outlines were dark but
-*coloured*. Saturation is deliberately not part of the test; filtering on it is
-what dropped navy, dark-teal and brown outlines. (Those test images aren't in
-the repo — `in/` is gitignored so nobody commits copyrighted pictures — so the
-numbers above are a record of the tuning, not something a clean checkout can
-reproduce.)
+fixed. That is the whole point: "dark enough to be an outline" is not a
+constant, and the previous fixed pair of thresholds produced a near-blank page
+on art whose outlines were dark but *coloured*. Saturation is deliberately not
+part of the test; filtering on it is what dropped navy, dark-teal and brown
+outlines.
+
+You can watch that happen rather than take my word for it:
+
+```bash
+python3 fixtures/report.py
+```
+
+Across the seven committed fixtures the same `--ink 4` resolves to cutoffs from
+**10 to 237**, and the `saturated-ink` fixture scores **0.00%** under the old
+`V < 120 && S < 60` rule — a blank sheet — against 9.51% under the current one.
+On the `ink-ramp` fixture, `--ink N` inks N% to within a few percent at every
+level, which is what makes the number a percentage rather than a direction.
+The report also holds the code to the other claims made here, and fails if a
+number moves. See `fixtures/README.md`, including what it deliberately does not
+cover.
+
+(The original tuning was done on real cartoon art in `in/`, which is gitignored
+so nobody commits copyrighted pictures. The fixtures exist because those numbers
+were otherwise impossible to re-derive.)
 
 Line width (works with any style, `0` = leave the style's own stroke alone):
 

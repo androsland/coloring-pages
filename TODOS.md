@@ -32,23 +32,31 @@
   the thing a printed page actually cares about — but it means the control is
   not invariant to framing, and a picture with no white background behaves
   differently from one cut out on white. Every image it was tuned against was
-  cut out on white, so the full-bleed case is untested. (2026-08-02)
+  cut out on white; the `full-bleed` fixture now covers the other case and pins
+  its cutoff so the behaviour cannot change silently, though the framing
+  sensitivity itself is intended and stays. (2026-08-02, fixture added
+  2026-08-03)
 
-- **The tuning sample is not reproducible from a clean checkout.** Both new
-  controls were tuned against four images in `in/`, which is gitignored on
-  purpose (don't commit copyrighted pictures). So the specific numbers quoted in
-  the README and in the source comments cannot be re-derived by anyone else, and
-  a future change to either heuristic has no fixture set to regress against.
-  Worth adding two or three small, freely-licensed cartoon images as a tracked
-  fixture directory (`fixtures/`, separate from `in/`) plus a script that prints
-  the ink coverage per style, so these claims become checkable. (2026-08-02)
+- **Nothing checks that the browser and the script still agree.** `fixtures/`
+  now regresses `coloringify.py`, but `docs/index.html` re-implements the same
+  histogram cutoff and the same Zhang-Suen thinning in JavaScript, and the two
+  have only ever been reconciled by hand — most recently at 54/54 byte-identical
+  cells, which is exactly the kind of result that rots silently. This is the
+  largest remaining verification gap, and it is bigger than the one the fixtures
+  just closed: a divergence means the page you preview is not the page the batch
+  script produces. Closing it needs the browser driven headlessly against the
+  same fixtures (Playwright is not currently a repo dependency), or the shared
+  maths extracted to one file both sides load. (2026-08-03)
 
 - **Cartoon's ink target quantises on images with large flat regions.** The
   cutoff is an integer V, so where many pixels share one brightness the achieved
-  coverage jumps: `0007.png` cannot go below 3.08% (a big pure-black region) and
-  jumps 6.07% → 11.55% between `--ink 6` and `--ink 8`. Harmless in practice —
-  the slider still moves monotonically — but the number on the badge is a target,
-  not a promise. (2026-08-02)
+  coverage jumps. Originally observed on `0007.png`, which is in the gitignored
+  `in/` and so was not checkable by anyone else; the `flat-bands` fixture now
+  demonstrates it from a clean checkout, holding 16.67% across `--ink 1` through
+  `16` and then jumping to 50% at `--ink 50`. Harmless in practice — the slider
+  still moves monotonically, and `claim_ink_level_moves_the_ink` enforces that —
+  but the number on the badge is a target, not a promise. (2026-08-02, pinned to
+  a committed fixture 2026-08-03)
 
 ## Robustness (pre-existing, surfaced by cross-model review 2026-08-02)
 
@@ -126,6 +134,38 @@
   card swap and the viewer panel both handle it now. Fix is the same aria-label
   capture/restore those two use. (accessibility review, 2026-08-02)
 
+## Fixtures and regression checks
+
+- **Nothing runs `fixtures/report.py` automatically.** There is no CI in this
+  repo at all, so the whole regression net only fires when someone remembers to
+  run it by hand. Every claim in `fixtures/` is worth exactly as much as that
+  habit. A single workflow running `python3 fixtures/report.py` on push would
+  close it. (security review, 2026-08-03)
+
+- **`baseline.json` is exact-equality against an unpinned OpenCV.**
+  `requirements.txt` pins `opencv-python>=4.8` with no ceiling and no lockfile,
+  and the drift check compares floats for exact equality. OpenCV's SIMD/IPP
+  paths through `adaptiveThreshold`/`Canny` have differed numerically across
+  builds before, so a legitimate version bump can present as drift that looks
+  identical to a real regression — which trains whoever hits it to reflexively
+  `--update-baseline` without reading why, disabling the net for the next real
+  one. Fix is either recording the OpenCV version alongside the numbers so drift
+  can be triaged, or giving the comparison an explicit small tolerance.
+  (security review, 2026-08-03)
+
+- **A corrupt fixture PNG crashes with a raw traceback.** `report.py`'s
+  pre-flight only checks `.exists()`, not readability, so a truncated or
+  garbled PNG reaches `cv2` and produces an unhandled `cv2.error` instead of
+  the friendly "run make_fixtures.py" message that already exists three lines
+  above. It does fail loudly rather than skipping silently, so this is polish,
+  not a hole. (security review, 2026-08-03)
+
+- **`--despeckle` has no claim behind it.** `page()` always passes
+  `despeckle=False`, so `despeckle()` could stop honouring its flag and every
+  claim would still pass — verified by making it unconditional in `convert()`.
+  Needs a fixture with specks of known area and a claim that they go at
+  `--min-area` and survive below it. (2026-08-03)
+
 ## Housekeeping
 
 - **Dead assignment in `add_reference()`**: `x0, y0 = x1 - 0, y1 - 0` — `x0` is
@@ -133,6 +173,22 @@
   so it was left out of that diff rather than padding it. (2026-08-02)
 
 ## Completed
+
+- **The tuning claims could not be re-derived by anyone else.** Both heuristics
+  were tuned against copyrighted art in the gitignored `in/`, so every number in
+  the README and the source comments was unverifiable from a clean checkout, and
+  neither had anything to regress against. Added `fixtures/`: seven images drawn
+  by code (no licence question), each built to exercise one documented claim,
+  plus `report.py`, which prints coverage per style and fails if a claim breaks
+  or a number drifts from `baseline.json`. All seven claims were checked against
+  builds broken in the specific way each exists to catch, and that check is itself
+  committed: `fixtures/falsify.py` applies 27 deliberate defects one at a time in
+  a temporary copy and reports which claims fire. 26 are caught; the exception is
+  `--despeckle`, recorded above as an uncovered gap rather than left implied.
+  Six adversarial review rounds ran against this, and every one found a real
+  defect — four hollow claims about the pipeline, then two rounds of defects in
+  the test logic added to fix the round before. Blind spots are written into
+  `fixtures/README.md`. (2026-08-03)
 
 - **`Cartoon` was dead weight: fixed HSV thresholds (`V < 120 && S < 60`) that
   suited almost nothing.** The saturation test assumed ink is grey and fills are

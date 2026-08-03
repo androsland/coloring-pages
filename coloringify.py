@@ -66,10 +66,10 @@ def to_lineart(img, ink_pct: float):
     the picture as ink and whiten everything else.
 
     The cutoff is measured from this image rather than fixed, because "dark
-    enough to be an outline" varies hugely between pictures — on the four
-    cartoon images this was tuned against, the same 4% target resolved to
-    cutoffs anywhere from 21 to 229. (Those images are not in the repo; `in/`
-    is gitignored so nobody commits copyrighted source pictures.)
+    enough to be an outline" varies hugely between pictures — across the
+    committed fixtures the same 4% target resolves to cutoffs from 10 to 237.
+    Run `python3 fixtures/report.py` to re-derive that; it also fails if the
+    number moves.
 
     Deliberately not filtered on saturation. The old rule also required S < 60,
     on the theory that ink is grey and fills are colourful — but cartoon
