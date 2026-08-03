@@ -20,6 +20,7 @@ each image is built to exercise one specific claim the code makes.
 python3 fixtures/report.py                    # print the tables, check the claims
 python3 fixtures/report.py --update-baseline  # accept the current numbers
 python3 fixtures/make_fixtures.py             # redraw the PNGs (they are committed)
+python3 fixtures/falsify.py                   # break the code on purpose, check a claim notices
 ```
 
 `report.py` exits non-zero if a claim fails or a number has moved since
@@ -36,7 +37,11 @@ in argument routing would actually live.
 ## Falsifying the claims
 
 Each claim has been run against a build broken in the specific way that claim
-exists to catch, and each one fails there:
+exists to catch, and each one fails there. `falsify.py` is that check, committed
+rather than described: it applies 27 deliberate defects one at a time in a
+temporary copy of the tree and reports which claims fire. 26 are caught. Run it
+and the table below re-derives itself; a table nobody can re-derive is the exact
+thing this directory exists to stop.
 
 | claim | broken build it was checked against |
 |---|---|
