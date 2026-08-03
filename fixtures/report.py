@@ -35,8 +35,37 @@ from coloringify import (  # noqa: E402
 
 FIX = Path(__file__).resolve().parent
 NAMES = ["grey-ink", "saturated-ink", "pale-ink", "full-bleed", "flat-bands",
-         "fine-detail"]
+         "fine-detail", "ink-ramp"]
+
+# Fixtures with actual strokes in them. ink-ramp is a smooth gradient with no
+# edges, so adaptive threshold finds nothing to ink and it reads 0.00% at every
+# line width — there is no stroke there to thin or thicken. Excluded from the
+# line-width claims for that reason and no other; it still takes part in every
+# claim about the ink cutoff, which is what it was drawn for.
+STROKE_NAMES = [n for n in NAMES if n != "ink-ramp"]
+
 BASELINE = FIX / "baseline.json"
+
+# Sweep points. Defined once because measure(), the claims and the printed
+# tables all have to agree: a claim that asserts over a different set than the
+# one recorded is a claim about nothing.
+WIDTHS = (-3, -2, -1, 0, 1, 2, 3)
+INK_LEVELS = (1, 2, 4, 8, 16, 50, 100)
+
+# How many fixtures must respond to a slider for it to count as working. Not
+# all of them: a fixture can legitimately stop responding, either because
+# thinning has converged to a skeleton or because the picture has no midtones
+# left to re-band. Not one either, or a slider that moves a single image carries
+# the rest. Healthy build scores 6/7 on ink and 5/6 at the deepest thinning
+# step; the broken builds these floors exist to catch score 0.
+MIN_RESPONDING = 3
+
+# How far achieved ink coverage may stray from the percentage requested, on the
+# one fixture where the question is meaningful. Wide, because even a linear ramp
+# quantises: 240 brightness columns put `--ink 1` at 1.25%, a ratio of 1.25 that
+# is arithmetic rather than error. Wide enough to be quiet on a healthy build,
+# narrow enough that halving or doubling the rate lands outside it.
+INK_RATIO_RANGE = (0.6, 1.5)
 
 
 def ink_pct(binary):
@@ -78,11 +107,11 @@ def measure():
             "styles": {s: ink_pct(page(name, s)) for s in ("threshold", "edges", "lineart")},
             "line_width": {
                 str(w): ink_pct(page(name, "threshold", line_width=w))
-                for w in (-3, -2, -1, 0, 1, 2, 3)
+                for w in WIDTHS
             },
             "ink_levels": {
                 str(p): ink_pct(page(name, "lineart", ink=p))
-                for p in (1, 2, 4, 8, 16, 50, 100)
+                for p in INK_LEVELS
             },
         }
         data[name] = entry
@@ -104,22 +133,108 @@ def claim_saturated_ink_survives(data):
 
 
 def claim_cutoff_adapts(data):
-    """README: 'the same `--ink 4` resolved to cutoffs anywhere from 21 to 229'
-    — the number is image-specific, which is the whole reason it is measured."""
+    """README: the same `--ink 4` resolves to a wide span of cutoffs — the
+    number is image-specific, which is the whole reason it is measured rather
+    than fixed. (The pre-fixture README quoted 21 to 229 from the private art in
+    `in/`; the committed set spans 10 to 237.)
+
+    Spread only. This says the cutoff *varies by image*; it does not say the
+    cutoff is *right*. Any per-image brightness statistic — min, mean, median,
+    a fixed fraction of the range — varies across differently-lit fixtures and
+    clears this bar. claim_ink_level_moves_the_ink and
+    claim_ink_percentage_is_calibrated are what hold the cutoff to the
+    percentage actually asked for; the three are only meaningful together.
+    """
     cuts = {n: data[n]["ink_cutoff_at_4pct"] for n in NAMES}
     lo, hi = min(cuts.values()), max(cuts.values())
     return (hi - lo >= 40,
             f"cutoff at --ink 4 spans {lo}..{hi} across fixtures ({cuts})")
 
 
+def claim_ink_level_moves_the_ink(data):
+    """`--ink N` is documented as "keep the darkest N% as ink". So raising it
+    must never remove ink, and must actually reach different pictures.
+
+    The companion to claim_cutoff_adapts, and the reason that one is not enough
+    on its own. Replacing the percentile search with `min + 0.15*(max-min)`
+    throws the requested percentage away entirely — `--ink 1` and `--ink 100`
+    then render identically — yet the cutoffs still span 53..212 across these
+    fixtures, so the spread claim passes and the slider is dead.
+
+    Ordering alone does not catch that either: a dead slider is flat, and flat
+    is non-decreasing. Hence the second half, counting fixtures that actually
+    respond. Not all of them — `fine-detail` is drawn in pure black on pure
+    white, so every level from 1% to 100% resolves to the same cutoff and it
+    reads 8.28 across the whole sweep. That is correct behaviour for an image
+    with no midtones, not a broken slider, and demanding all seven would fail
+    the healthy build for the same reason strict per-step growth would fail
+    thinning.
+    """
+    bad, responding = [], 0
+    for name in NAMES:
+        seq = [data[name]["ink_levels"][str(p)] for p in INK_LEVELS]
+        if any(b < a for a, b in zip(seq, seq[1:])):
+            bad.append(f"{name}: more ink asked for, less delivered {seq}")
+        if len(set(seq)) >= 2:
+            responding += 1
+    if responding < MIN_RESPONDING:
+        bad.append(f"--ink changes nothing on {len(NAMES) - responding}/"
+                   f"{len(NAMES)} fixtures "
+                   f"(need {MIN_RESPONDING} responding); the cutoff is ignoring "
+                   f"the percentage it was handed")
+    return not bad, (f"never decreasing; {responding}/{len(NAMES)} fixtures respond "
+                     f"to --ink (floor {MIN_RESPONDING}; fine-detail is legitimately "
+                     f"flat)" if not bad else "; ".join(bad))
+
+
+def claim_ink_percentage_is_calibrated(data):
+    """`--ink N` is documented as keeping 'the darkest N%' — so the number has to
+    mean the percentage, not merely a direction.
+
+    Responsiveness and ordering both miss this. A cutoff that honours the request
+    at half the rate asked for still varies per image, still never loses ink as
+    the slider rises, and still moves at every level; it just quietly inks half
+    of what was asked. Every other claim here passes it.
+
+    Only ink-ramp can answer the question. A linear left-to-right gradient has one
+    pixel column per brightness step, so the p-th percentile lands at p% by
+    construction and achieved coverage is comparable to the request. The other
+    fixtures have lumpy histograms on purpose — flat-bands overshoots --ink 4 by
+    four times, which is a documented property of the cutoff being an integer V,
+    not a defect — so measuring calibration on them would assert the noise.
+    """
+    lo, hi = INK_RATIO_RANGE
+    bad, ratios = [], {}
+    for p in INK_LEVELS:
+        got = data["ink-ramp"]["ink_levels"][str(p)]
+        ratio = got / p
+        ratios[p] = round(ratio, 3)
+        if not (lo <= ratio <= hi):
+            bad.append(f"--ink {p} inked {got}% (ratio {ratio:.2f}, want {lo}-{hi})")
+    return not bad, (f"ink-ramp tracks the request at every level, ratios {ratios}"
+                     if not bad else "; ".join(bad))
+
+
 def claim_only_2x2_vanishes(_data):
     """README and set_line_width's docstring: thinning 'will not break a line,
     pull its ends back, or erase a lone pixel', except 'an isolated 2x2 block of
-    ink is erased outright'. Shapes are at the coordinates make_fixtures.py drew."""
+    ink is erased outright'. Shapes are at the coordinates make_fixtures.py drew.
+
+    Checked at every depth the CLI offers, not just -1. An earlier version only
+    ever called set_line_width(mask, -1), which left the guarantee unverified at
+    exactly the settings that stress it hardest: bolting a plain 3x3 erosion onto
+    every pass after the first leaves -1 untouched and passes this claim, while
+    -3 erases the drawing down to a blank page. Erosion doing precisely that is
+    why Zhang-Suen was chosen over it, so the one claim guarding that choice has
+    to look past the first iteration.
+
+    This is a survival check, not a pixel count: 4x4 legitimately drops from 3px
+    to 1px between -1 and -2 as it converges to its skeleton. What must never
+    happen is a shape reaching zero.
+    """
     img = load_bgr(FIX / "fine-detail.png")
     v = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)[:, :, 2]
     mask = np.where(v < 128, 0, 255).astype(np.uint8)
-    thin = set_line_width(mask, -1)
     regions = {                    # (label, y0,y1, x0,x1, must_survive)
         "lone pixel": (94, 99, 28, 33, True),
         "2x2 block": (94, 100, 58, 64, False),
@@ -128,12 +243,17 @@ def claim_only_2x2_vanishes(_data):
         "2x8 bar": (94, 100, 148, 160, True),
         "1px line": (74, 79, 20, 221, True),
     }
+    depths = [w for w in WIDTHS if w < 0]
     notes, ok = [], True
-    for label, (y0, y1, x0, x1, must) in regions.items():
-        left = int((thin[y0:y1, x0:x1] == 0).sum())
-        good = (left > 0) == must
-        ok &= good
-        notes.append(f"{label}={left}px{'' if good else ' UNEXPECTED'}")
+    for depth in depths:
+        thin = set_line_width(mask, depth)
+        left_at = []
+        for label, (y0, y1, x0, x1, must) in regions.items():
+            left = int((thin[y0:y1, x0:x1] == 0).sum())
+            good = (left > 0) == must
+            ok &= good
+            left_at.append(f"{label}={left}px{'' if good else ' UNEXPECTED'}")
+        notes.append(f"at {depth:+d}: " + ", ".join(left_at))
     return ok, "; ".join(notes)
 
 
@@ -144,18 +264,27 @@ def claim_line_width_moves_the_ink(data):
     """The slider has to actually mean something in *both* directions: never less
     ink as it rises, and a real change either side of Normal.
 
-    Two hollow versions of this claim have already shipped, each defeated by the
-    thing it did not measure. Ordering alone passed against a no-op slider, since
-    a flat sequence is trivially non-decreasing. Ordering plus a combined
+    Three hollow versions of this claim have already shipped, each defeated by
+    the thing it did not measure. Ordering alone passed against a no-op slider,
+    since a flat sequence is trivially non-decreasing. Ordering plus a combined
     end-to-end spread then passed against a slider that thickened but never
     thinned — the working half carried the broken half over the bar. So each
     direction is now bounded on its own. Thinning is the half that matters most:
-    it is the Zhang-Suen path the 2x2 claim depends on."""
-    widths = (-3, -2, -1, 0, 1, 2, 3)
-    zero = widths.index(0)
-    bad, thins, thicks = [], [], []
-    for name in NAMES:
-        seq = [data[name]["line_width"][str(w)] for w in widths]
+    it is the Zhang-Suen path the 2x2 claim depends on.
+
+    The fourth was subtler and is why the deepest step is counted separately
+    below. Per-side distinct-value counting asks only for two distinct readings
+    somewhere on a side, which capping the thinning loop at two iterations
+    satisfies: -1 still differs from -2, so the pair is found, while -3 silently
+    stops doing anything at all. Comparing -1 against -2 does not catch it
+    either — that pair is exactly the one such a cap keeps working. Only the
+    deepest step tells them apart."""
+    zero = WIDTHS.index(0)
+    bad, thins, thicks, deep_moves = [], [], [], 0
+    for name in STROKE_NAMES:
+        seq = [data[name]["line_width"][str(w)] for w in WIDTHS]
+        if seq[0] != seq[1]:
+            deep_moves += 1
         normal = seq[zero]
         thin_delta, thick_delta = normal - seq[0], seq[-1] - normal
         thins.append(thin_delta)
@@ -179,9 +308,20 @@ def claim_line_width_moves_the_ink(data):
             bad.append(f"{name}: thinning ignores magnitude, {seq[:zero]}")
         elif len(set(seq[zero + 1:])) < 2:
             bad.append(f"{name}: thickening ignores magnitude, {seq[zero + 1:]}")
+    # The deepest step, counted across fixtures rather than demanded of each.
+    # flat-bands legitimately reads the same at -3 and -2 (Zhang-Suen has
+    # reached a skeleton and further rounds correctly do nothing), so requiring
+    # all six would fail the healthy build. A depth-capped thinner moves none.
+    if deep_moves < MIN_RESPONDING:
+        bad.append(f"-3 is indistinguishable from -2 on "
+                   f"{len(STROKE_NAMES) - deep_moves}/{len(STROKE_NAMES)} "
+                   f"fixtures (need {MIN_RESPONDING} moving); the deepest "
+                   f"thinning setting is not reaching the image")
     return not bad, (f"monotonic everywhere; smallest thinning {min(thins):.2f}pp, "
                      f"smallest thickening {min(thicks):.2f}pp (floor {MIN_DELTA_PP}pp "
-                     f"each); magnitude distinguishable on both sides"
+                     f"each); magnitude distinguishable on both sides; "
+                     f"{deep_moves}/{len(STROKE_NAMES)} still move at -3 "
+                     f"(floor {MIN_RESPONDING})"
                      if not bad else "; ".join(bad))
 
 
@@ -204,7 +344,10 @@ def claim_ink_only_touches_cartoon(_data):
 CLAIMS = [
     ("coloured outlines survive the current ink rule", claim_saturated_ink_survives),
     ("the ink cutoff is image-specific, not a constant", claim_cutoff_adapts),
-    ("thinning erases the 2x2 block and nothing else", claim_only_2x2_vanishes),
+    ("--ink reaches the picture at every level", claim_ink_level_moves_the_ink),
+    ("--ink inks the percentage it was asked for", claim_ink_percentage_is_calibrated),
+    ("thinning erases the 2x2 block and nothing else, at every depth",
+     claim_only_2x2_vanishes),
     ("line width both orders and actually moves the ink", claim_line_width_moves_the_ink),
     ("--ink affects Cartoon only", claim_ink_only_touches_cartoon),
 ]
@@ -231,16 +374,14 @@ def main():
         print(f"  {n:<16}{s['threshold']:>8}{s['edges']:>8}{s['lineart']:>9}{c:>11}")
 
     print("\nBold at each line width\n")
-    widths = (-3, -2, -1, 0, 1, 2, 3)
-    print(f"  {'fixture':<16}" + "".join(f"{w:>+8}" for w in widths))
+    print(f"  {'fixture':<16}" + "".join(f"{w:>+8}" for w in WIDTHS))
     for n in NAMES:
-        print(f"  {n:<16}" + "".join(f"{data[n]['line_width'][str(w)]:>8}" for w in widths))
+        print(f"  {n:<16}" + "".join(f"{data[n]['line_width'][str(w)]:>8}" for w in WIDTHS))
 
     print("\nCartoon at each ink level\n")
-    levels = (1, 2, 4, 8, 16, 50, 100)
-    print(f"  {'fixture':<16}" + "".join(f"{p:>7}%" for p in levels))
+    print(f"  {'fixture':<16}" + "".join(f"{p:>7}%" for p in INK_LEVELS))
     for n in NAMES:
-        print(f"  {n:<16}" + "".join(f"{data[n]['ink_levels'][str(p)]:>8}" for p in levels))
+        print(f"  {n:<16}" + "".join(f"{data[n]['ink_levels'][str(p)]:>8}" for p in INK_LEVELS))
 
     print("\nClaims\n")
     failures = 0

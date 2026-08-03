@@ -128,6 +128,38 @@
   card swap and the viewer panel both handle it now. Fix is the same aria-label
   capture/restore those two use. (accessibility review, 2026-08-02)
 
+## Fixtures and regression checks
+
+- **Nothing runs `fixtures/report.py` automatically.** There is no CI in this
+  repo at all, so the whole regression net only fires when someone remembers to
+  run it by hand. Every claim in `fixtures/` is worth exactly as much as that
+  habit. A single workflow running `python3 fixtures/report.py` on push would
+  close it. (security review, 2026-08-03)
+
+- **`baseline.json` is exact-equality against an unpinned OpenCV.**
+  `requirements.txt` pins `opencv-python>=4.8` with no ceiling and no lockfile,
+  and the drift check compares floats for exact equality. OpenCV's SIMD/IPP
+  paths through `adaptiveThreshold`/`Canny` have differed numerically across
+  builds before, so a legitimate version bump can present as drift that looks
+  identical to a real regression — which trains whoever hits it to reflexively
+  `--update-baseline` without reading why, disabling the net for the next real
+  one. Fix is either recording the OpenCV version alongside the numbers so drift
+  can be triaged, or giving the comparison an explicit small tolerance.
+  (security review, 2026-08-03)
+
+- **A corrupt fixture PNG crashes with a raw traceback.** `report.py`'s
+  pre-flight only checks `.exists()`, not readability, so a truncated or
+  garbled PNG reaches `cv2` and produces an unhandled `cv2.error` instead of
+  the friendly "run make_fixtures.py" message that already exists three lines
+  above. It does fail loudly rather than skipping silently, so this is polish,
+  not a hole. (security review, 2026-08-03)
+
+- **`--despeckle` has no claim behind it.** `page()` always passes
+  `despeckle=False`, so `despeckle()` could stop honouring its flag and every
+  claim would still pass — verified by making it unconditional in `convert()`.
+  Needs a fixture with specks of known area and a claim that they go at
+  `--min-area` and survive below it. (2026-08-03)
+
 ## Housekeeping
 
 - **Dead assignment in `add_reference()`**: `x0, y0 = x1 - 0, y1 - 0` — `x0` is
@@ -139,13 +171,14 @@
 - **The tuning claims could not be re-derived by anyone else.** Both heuristics
   were tuned against copyrighted art in the gitignored `in/`, so every number in
   the README and the source comments was unverifiable from a clean checkout, and
-  neither had anything to regress against. Added `fixtures/`: six images drawn by
-  code (no licence question), each built to exercise one documented claim, plus
-  `report.py`, which prints coverage per style and fails if a claim breaks or a
-  number drifts from `baseline.json`. The claims were checked against
-  deliberately broken builds — the old fixed-threshold rule and plain erosion in
-  place of Zhang-Suen — and both are caught. Blind spots are written into
-  `fixtures/README.md` rather than left implied. (2026-08-03)
+  neither had anything to regress against. Added `fixtures/`: seven images drawn
+  by code (no licence question), each built to exercise one documented claim,
+  plus `report.py`, which prints coverage per style and fails if a claim breaks
+  or a number drifts from `baseline.json`. All seven claims were checked against
+  builds broken in the specific way each exists to catch — thirteen mutations in
+  total, twelve caught, the thirteenth (`--despeckle`) recorded above as an
+  uncovered gap rather than left implied. Blind spots are written into
+  `fixtures/README.md`. (2026-08-03)
 
 - **`Cartoon` was dead weight: fixed HSV thresholds (`V < 120 && S < 60`) that
   suited almost nothing.** The saturation test assumed ink is grey and fills are

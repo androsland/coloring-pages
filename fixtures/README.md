@@ -1,6 +1,6 @@
 # Fixtures
 
-Six small images and a report that measures the pipeline against them.
+Seven small images and a report that measures the pipeline against them.
 
 ## Why these exist
 
@@ -40,17 +40,28 @@ exists to catch, and each one fails there:
 
 | claim | broken build it was checked against |
 |---|---|
-| coloured outlines survive | the old fixed `V < 120 && S < 60` rule |
-| the cutoff is image-specific | `ink_cutoff` pinned to a constant 120 |
-| thinning erases only the 2x2 | plain erosion in place of Zhang-Suen |
-| line width moves the ink | a no-op `set_line_width` |
-| `--ink` affects Cartoon only | `--ink` leaked into the Bold path inside `convert()` |
+| coloured outlines survive | the old fixed `V < 120 && S < 60` rule; a weakened `S < 180` variant |
+| the cutoff is image-specific | `ink_cutoff` pinned to a constant 128 |
+| `--ink` reaches the picture | `ink_cutoff` returning `min + 0.15*(max-min)`, discarding the requested percentage |
+| `--ink` inks the percentage asked for | the percentile honoured at half, and at double, the requested rate |
+| thinning erases only the 2x2 | plain erosion in place of Zhang-Suen; erosion bolted on after the first pass |
+| line width moves the ink | a no-op `set_line_width`; magnitude-blind variants; the thinning loop depth-capped at 1 and at 2; `line_width` dropped in `convert()` |
+| `--ink` affects Cartoon only | `--ink` leaked into the Bold path, and into the Thin path, inside `convert()` |
 
-Two of these were added *because* the original versions passed against a broken
-build. The line-width claim tested ordering only, and a slider that does nothing
-produces a flat sequence, which is trivially non-decreasing. If you add a claim,
-break the code on purpose and watch it fail before you trust it — a check that
-has never failed has never been tested.
+Most of these were added *because* an earlier version passed against a broken
+build. The line-width claim alone has shipped hollow four times: ordering only
+(a dead slider is flat, and flat is non-decreasing); ordering plus a combined
+end-to-end spread (the working half carried the broken half); per-direction
+floors (a magnitude-blind slider cleared one fixture by 0.05pp on luck of its
+geometry); and per-side distinct-value counting (satisfied by `-1` differing
+from `-2`, while `-3` silently stopped doing anything).
+
+The pattern behind all four is worth naming: each verified the property it set
+out to test and assumed the one immediately adjacent. If you add a claim, break
+the code on purpose and watch it fail before you trust it — a check that has
+never failed has never been tested. Verify the mutation actually applied, too; a
+find-and-replace that misses its target passes silently and looks exactly like a
+claim that cannot be broken.
 
 ## What each fixture is for
 
@@ -62,8 +73,9 @@ has never failed has never been tested.
 | `full-bleed` | a picture with no white background. The percentile is measured over the whole image, so framing changes the answer — a documented blind spot, pinned here so it cannot change silently |
 | `flat-bands` | large uniform regions, where an integer cutoff makes achieved coverage jump rather than glide |
 | `fine-detail` | thinning keeps a lone pixel, 1px lines, 3x3, 4x4 and a 2x8 bar, and erases exactly one shape: the isolated 2x2 block |
+| `ink-ramp` | a linear brightness gradient, the only fixture where `--ink N` can be checked against N. One pixel column per brightness step puts the p-th percentile at p%, so achieved coverage is comparable to the request. Every other image has a lumpy histogram on purpose |
 
-Together they put the cutoff for `--ink 4` anywhere from **21 to 237**, which is
+Together they put the cutoff for `--ink 4` anywhere from **10 to 237**, which is
 the point of measuring it per image rather than fixing it.
 
 ## What this does NOT cover
@@ -72,7 +84,7 @@ Stated plainly, because an unlisted limit reads as coverage.
 
 - **These are not real photographs or real art.** No JPEG artefacts, no
   photographic gradients, no scanner noise, only light anti-aliasing. A change
-  could pass all six fixtures and still ruin a phone photo or an anime
+  could pass all seven fixtures and still ruin a phone photo or an anime
   screenshot. The fixtures protect the *documented claims*; they do not tell you
   the tool still looks good.
 - **`coloringify.py` only.** `docs/index.html` re-implements the same maths for
@@ -93,6 +105,24 @@ Stated plainly, because an unlisted limit reads as coverage.
 - **Nothing about `Thin`.** Canny's doubled outline on already-inked art is a
   known, documented limitation that is not being fixed, so there is no claim to
   hold it to.
+- **`--despeckle` is never exercised.** `page()` always passes `despeckle=False`,
+  so `despeckle()` could stop honouring its flag — or stop working entirely — and
+  every claim here would still pass. Verified: making despeckle unconditional in
+  `convert()` breaks no claim.
+- **`ink-ramp` takes no part in the line-width claims.** A smooth gradient has no
+  edges for adaptive threshold to find, so it reads 0.00% ink at every width and
+  there is no stroke to thin. The exclusion is explicit in `STROKE_NAMES`, and it
+  is the only fixture excluded from anything.
+- **The slider floors are aggregate, not per-fixture.** `--ink` and the deepest
+  thinning step are each required to move on at least 3 fixtures, not all of
+  them, because convergence and flat histograms make some legitimately stop
+  responding. A regression that killed the slider on exactly the fixtures below
+  that margin would pass. The healthy build scores 6/7 and 5/6 against a floor of
+  3, so the margin is two fixtures wide in both directions.
+- **Coverage ratios, not pixel positions, on the ramp.** `--ink` calibration is
+  checked as a ratio of achieved to requested coverage within 0.6–1.5. A cutoff
+  off by less than that band, or one inking the *wrong* pixels at the right
+  count, passes.
 
 ## Adding one
 

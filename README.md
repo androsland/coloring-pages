@@ -111,9 +111,11 @@ You can watch that happen rather than take my word for it:
 python3 fixtures/report.py
 ```
 
-Across the six committed fixtures the same `--ink 4` resolves to cutoffs from
-**21 to 237**, and the `saturated-ink` fixture scores **0.00%** under the old
+Across the seven committed fixtures the same `--ink 4` resolves to cutoffs from
+**10 to 237**, and the `saturated-ink` fixture scores **0.00%** under the old
 `V < 120 && S < 60` rule — a blank sheet — against 9.51% under the current one.
+On the `ink-ramp` fixture, `--ink N` inks N% to within a few percent at every
+level, which is what makes the number a percentage rather than a direction.
 The report also holds the code to the other claims made here, and fails if a
 number moves. See `fixtures/README.md`, including what it deliberately does not
 cover.

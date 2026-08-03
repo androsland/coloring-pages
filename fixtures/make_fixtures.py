@@ -134,6 +134,26 @@ def f_fine_detail():
     return img
 
 
+def f_ink_ramp():
+    """Claim: `--ink N` keeps 'the darkest N% of the picture' — the number is a
+    percentage, not just a direction.
+
+    The only fixture where that is checkable. Every other image here has a lumpy
+    histogram: ties and gaps mean the cutoff lands on a crowded brightness and
+    the achieved coverage overshoots, by 4x on flat-bands at --ink 4. Useful
+    realism, useless for measuring calibration, and the other fixtures cover the
+    quantisation case deliberately.
+
+    A left-to-right linear ramp has one pixel column per brightness step, so the
+    p-th percentile sits at p% by construction and achieved coverage can be
+    compared against the request directly. Without it, a cutoff that honours the
+    percentage at half the rate asked for passes every other claim: it still
+    varies per image, still orders correctly, still responds at every level.
+    """
+    ramp = np.tile(np.linspace(0, 255, W, dtype=np.uint8), (H, 1))
+    return cv2.cvtColor(ramp, cv2.COLOR_GRAY2BGR)
+
+
 FIXTURES = {
     "grey-ink": f_grey_ink,
     "saturated-ink": f_saturated_ink,
@@ -141,6 +161,7 @@ FIXTURES = {
     "full-bleed": f_full_bleed,
     "flat-bands": f_flat_bands,
     "fine-detail": f_fine_detail,
+    "ink-ramp": f_ink_ramp,
 }
 
 
