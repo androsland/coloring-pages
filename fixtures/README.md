@@ -42,10 +42,11 @@ exists to catch, and each one fails there:
 |---|---|
 | coloured outlines survive | the old fixed `V < 120 && S < 60` rule; a weakened `S < 180` variant |
 | the cutoff is image-specific | `ink_cutoff` pinned to a constant 128 |
-| `--ink` reaches the picture | `ink_cutoff` returning `min + 0.15*(max-min)`, discarding the requested percentage |
-| `--ink` inks the percentage asked for | the percentile honoured at half, and at double, the requested rate |
+| `--ink` reaches the picture | `ink_cutoff` returning `min + 0.15*(max-min)`, discarding the requested percentage; a fixed cutoff for thin-histogram images, freezing the slider on three fixtures |
+| `--ink` inks the percentage asked for | the percentile honoured at half, at double, and at 0.65x, 0.95x and 1.05x the requested rate |
+| the exemption lists are earned | `INK_MAY_BE_FLAT` padded with three fixtures a broken cutoff had frozen; `STROKE_NAMES` widened to drop a fixture that really does have strokes |
 | thinning erases only the 2x2 | plain erosion in place of Zhang-Suen; erosion bolted on after the first pass |
-| line width moves the ink | a no-op `set_line_width`; magnitude-blind variants; the thinning loop depth-capped at 1 and at 2; `line_width` dropped in `convert()` |
+| line width moves the ink | a no-op `set_line_width`; magnitude-blind variants; the thinning loop depth-capped at 1 and at 2, and capped only on "busy" pages so it froze just two fixtures; `line_width` dropped in `convert()` |
 | `--ink` affects Cartoon only | `--ink` leaked into the Bold path, and into the Thin path, inside `convert()` |
 
 Most of these were added *because* an earlier version passed against a broken
@@ -56,7 +57,11 @@ floors (a magnitude-blind slider cleared one fixture by 0.05pp on luck of its
 geometry); and per-side distinct-value counting (satisfied by `-1` differing
 from `-2`, while `-3` silently stopped doing anything).
 
-The pattern behind all four is worth naming: each verified the property it set
+The two claims added to close those gaps then shipped hollow themselves, in the
+same shape: both accepted "enough fixtures responded" rather than naming which,
+and the calibration band was wide enough to pass a systematic 35% under-inking.
+
+The pattern behind all of them is worth naming: each verified the property it set
 out to test and assumed the one immediately adjacent. If you add a claim, break
 the code on purpose and watch it fail before you trust it — a check that has
 never failed has never been tested. Verify the mutation actually applied, too; a
@@ -111,18 +116,25 @@ Stated plainly, because an unlisted limit reads as coverage.
   `convert()` breaks no claim.
 - **`ink-ramp` takes no part in the line-width claims.** A smooth gradient has no
   edges for adaptive threshold to find, so it reads 0.00% ink at every width and
-  there is no stroke to thin. The exclusion is explicit in `STROKE_NAMES`, and it
-  is the only fixture excluded from anything.
-- **The slider floors are aggregate, not per-fixture.** `--ink` and the deepest
-  thinning step are each required to move on at least 3 fixtures, not all of
-  them, because convergence and flat histograms make some legitimately stop
-  responding. A regression that killed the slider on exactly the fixtures below
-  that margin would pass. The healthy build scores 6/7 and 5/6 against a floor of
-  3, so the margin is two fixtures wide in both directions.
-- **Coverage ratios, not pixel positions, on the ramp.** `--ink` calibration is
-  checked as a ratio of achieved to requested coverage within 0.6–1.5. A cutoff
-  off by less than that band, or one inking the *wrong* pixels at the right
-  count, passes.
+  there is no stroke to thin. It is the only fixture excluded from anything, and
+  the exclusion is checked rather than asserted in a comment: anything left out
+  of `STROKE_NAMES` must really read 0.00% at every width, so a fixture cannot be
+  added to that filter to dodge a failure.
+- **Two fixtures are exempt from responding to a slider, and both exemptions are
+  earned rather than declared.** `fine-detail` need not respond to `--ink`
+  (`INK_MAY_BE_FLAT`) and `flat-bands` need not move at `-3`
+  (`DEEPEST_MAY_CONVERGE`). Every other fixture must respond individually — an
+  earlier version counted instead ("at least 3 of 7"), which a cutoff that froze
+  `--ink` on exactly three images walked straight through, scoring 3/7 with the
+  slider dead on four of seven pictures. The ink exemption is now checked against
+  the image: a fixture may only be listed if it has 2 or fewer brightness levels,
+  which `fine-detail` does and no other fixture comes close to.
+- **Coverage in percentage points, not pixel positions, on the ramp.** `--ink`
+  calibration allows 0.7 points of deviation, one pixel column plus a little.
+  A ratio band stood here first and was much weaker: wide enough for the bottom
+  of the range, where one column is a quarter of `--ink 1`, it also accepted a
+  35-point hole at `--ink 100`. Still nothing checks *which* pixels get inked —
+  a cutoff hitting the right count on the wrong pixels passes.
 
 ## Adding one
 

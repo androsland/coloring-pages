@@ -52,20 +52,37 @@ BASELINE = FIX / "baseline.json"
 WIDTHS = (-3, -2, -1, 0, 1, 2, 3)
 INK_LEVELS = (1, 2, 4, 8, 16, 50, 100)
 
-# How many fixtures must respond to a slider for it to count as working. Not
-# all of them: a fixture can legitimately stop responding, either because
-# thinning has converged to a skeleton or because the picture has no midtones
-# left to re-band. Not one either, or a slider that moves a single image carries
-# the rest. Healthy build scores 6/7 on ink and 5/6 at the deepest thinning
-# step; the broken builds these floors exist to catch score 0.
-MIN_RESPONDING = 3
+# Fixtures allowed not to respond to a slider, each for a stated reason. Named
+# individually rather than counted, because a bare "at least N of them must
+# respond" floor turned out to be trivially gameable: a cutoff that froze --ink
+# on exactly three images scored 3/7 against a floor of 3 and passed, with the
+# slider dead on four of seven pictures. Anything not listed here must respond on
+# its own, so killing any single one of them fails loudly and names the fixture.
+#
+# fine-detail is pure black on pure white, so every level from 1% to 100%
+# resolves to the same cutoff — correct for an image with no midtones.
+INK_MAY_BE_FLAT = {"fine-detail"}
+# flat-bands reaches a Zhang-Suen skeleton by -2, so -3 correctly does nothing.
+DEEPEST_MAY_CONVERGE = {"flat-bands"}
+# Most brightness levels an image may contain and still qualify for
+# INK_MAY_BE_FLAT. Two levels means one possible cutoff, so no percentage can
+# move it; fine-detail is pure black on pure white and has exactly 2. Every
+# other fixture has 6 or more, so none of them can be quietly added to the list.
+MAX_FLAT_LEVELS = 2
 
-# How far achieved ink coverage may stray from the percentage requested, on the
-# one fixture where the question is meaningful. Wide, because even a linear ramp
-# quantises: 240 brightness columns put `--ink 1` at 1.25%, a ratio of 1.25 that
-# is arithmetic rather than error. Wide enough to be quiet on a healthy build,
-# narrow enough that halving or doubling the rate lands outside it.
-INK_RATIO_RANGE = (0.6, 1.5)
+# How far achieved ink coverage may stray from the percentage requested, in
+# percentage points, on the one fixture where the question is meaningful.
+#
+# Absolute rather than a ratio. A ratio band has to be wide at the bottom of the
+# range, where quantisation dominates — `--ink 1` lands at 1.25%, a ratio of 1.25
+# that is arithmetic, not error — and that width then carries all the way up,
+# where it means something entirely different: a 0.65 ratio at `--ink 100` is a
+# 35-point shortfall, and a band loose enough to accept 1.25 at the bottom
+# accepts that too. Measured in points the ramp behaves uniformly: the achievable
+# coverages are multiples of one pixel column, 100/240 = 0.417 points, so every
+# level should land within about one column of the request regardless of size.
+# Healthy build's worst is 0.42; a 10% miscalibration misses by 10.4.
+RAMP_TOLERANCE_PP = 0.7
 
 
 def ink_pct(binary):
@@ -104,6 +121,11 @@ def measure():
         v = cv2.cvtColor(load_bgr(FIX / f"{name}.png"), cv2.COLOR_BGR2HSV)[:, :, 2]
         entry = {
             "ink_cutoff_at_4pct": int(ink_cutoff(v, 4.0)),
+            # How many brightness levels the image actually contains. Recorded
+            # because it is what earns a place in INK_MAY_BE_FLAT: an image with
+            # two levels has exactly one place a cutoff can go, so --ink cannot
+            # move it. Asserted in claim_ink_level_moves_the_ink.
+            "distinct_v": int((np.bincount(v.ravel(), minlength=256) > 0).sum()),
             "styles": {s: ink_pct(page(name, s)) for s in ("threshold", "edges", "lineart")},
             "line_width": {
                 str(w): ink_pct(page(name, "threshold", line_width=w))
@@ -162,29 +184,43 @@ def claim_ink_level_moves_the_ink(data):
     fixtures, so the spread claim passes and the slider is dead.
 
     Ordering alone does not catch that either: a dead slider is flat, and flat
-    is non-decreasing. Hence the second half, counting fixtures that actually
-    respond. Not all of them — `fine-detail` is drawn in pure black on pure
-    white, so every level from 1% to 100% resolves to the same cutoff and it
-    reads 8.28 across the whole sweep. That is correct behaviour for an image
-    with no midtones, not a broken slider, and demanding all seven would fail
-    the healthy build for the same reason strict per-step growth would fail
-    thinning.
+    is non-decreasing. Hence the second half, requiring each fixture outside
+    INK_MAY_BE_FLAT to respond on its own.
+
+    Per fixture, not counted across them. A "at least 3 of 7 must respond" floor
+    stood here first and was worth very little: a cutoff that returned a fixed 90
+    for any image with a thin histogram froze --ink on pale-ink, full-bleed and
+    flat-bands, scored exactly 3/7, and passed with the slider dead on four of
+    the seven pictures. Naming the one fixture that may legitimately be flat
+    costs nothing and removes the whole class.
     """
-    bad, responding = [], 0
+    bad, responding = [], []
     for name in NAMES:
         seq = [data[name]["ink_levels"][str(p)] for p in INK_LEVELS]
         if any(b < a for a, b in zip(seq, seq[1:])):
             bad.append(f"{name}: more ink asked for, less delivered {seq}")
         if len(set(seq)) >= 2:
-            responding += 1
-    if responding < MIN_RESPONDING:
-        bad.append(f"--ink changes nothing on {len(NAMES) - responding}/"
-                   f"{len(NAMES)} fixtures "
-                   f"(need {MIN_RESPONDING} responding); the cutoff is ignoring "
-                   f"the percentage it was handed")
-    return not bad, (f"never decreasing; {responding}/{len(NAMES)} fixtures respond "
-                     f"to --ink (floor {MIN_RESPONDING}; fine-detail is legitimately "
-                     f"flat)" if not bad else "; ".join(bad))
+            responding.append(name)
+        elif name not in INK_MAY_BE_FLAT:
+            bad.append(f"{name}: --ink changes nothing across {INK_LEVELS} "
+                       f"(all {seq[0]}%); the cutoff is ignoring the percentage "
+                       f"it was handed")
+    # The exemption list has to keep earning itself, exactly as STROKE_NAMES
+    # does. Otherwise the cheapest way past this claim is to add a name to it:
+    # padding INK_MAY_BE_FLAT with the three fixtures a broken cutoff had frozen
+    # made the report read "3/7 respond, every one outside [...]" and pass. A
+    # fixture may only be listed if its histogram genuinely leaves the cutoff
+    # nowhere to go.
+    for name in sorted(INK_MAY_BE_FLAT):
+        levels = data[name]["distinct_v"]
+        if levels > MAX_FLAT_LEVELS:
+            bad.append(f"{name} is exempted from responding to --ink on the "
+                       f"grounds that it has no midtones, but it has {levels} "
+                       f"brightness levels (limit {MAX_FLAT_LEVELS}) — the "
+                       f"exemption is not earned")
+    return not bad, (f"never decreasing; {len(responding)}/{len(NAMES)} fixtures "
+                     f"respond, every one outside {sorted(INK_MAY_BE_FLAT)}"
+                     if not bad else "; ".join(bad))
 
 
 def claim_ink_percentage_is_calibrated(data):
@@ -202,16 +238,23 @@ def claim_ink_percentage_is_calibrated(data):
     fixtures have lumpy histograms on purpose — flat-bands overshoots --ink 4 by
     four times, which is a documented property of the cutoff being an integer V,
     not a defect — so measuring calibration on them would assert the noise.
+
+    Measured in percentage points, not as a ratio. A ratio band wide enough for
+    the bottom of the range, where one pixel column is a quarter of the request,
+    is far too wide at the top, where the same ratio is a 35-point hole: scaling
+    every request by 0.65 held the ratio inside 0.6-1.5 at every level and passed
+    this claim while under-inking by a third. Points do not have that problem.
     """
-    lo, hi = INK_RATIO_RANGE
-    bad, ratios = [], {}
+    bad, devs = [], {}
     for p in INK_LEVELS:
         got = data["ink-ramp"]["ink_levels"][str(p)]
-        ratio = got / p
-        ratios[p] = round(ratio, 3)
-        if not (lo <= ratio <= hi):
-            bad.append(f"--ink {p} inked {got}% (ratio {ratio:.2f}, want {lo}-{hi})")
-    return not bad, (f"ink-ramp tracks the request at every level, ratios {ratios}"
+        dev = got - p
+        devs[p] = round(dev, 2)
+        if abs(dev) > RAMP_TOLERANCE_PP:
+            bad.append(f"--ink {p} inked {got}% ({dev:+.2f}pp, "
+                       f"tolerance {RAMP_TOLERANCE_PP}pp)")
+    return not bad, (f"ink-ramp lands within {RAMP_TOLERANCE_PP}pp of the request "
+                     f"at every level, deviations {devs}"
                      if not bad else "; ".join(bad))
 
 
@@ -308,20 +351,39 @@ def claim_line_width_moves_the_ink(data):
             bad.append(f"{name}: thinning ignores magnitude, {seq[:zero]}")
         elif len(set(seq[zero + 1:])) < 2:
             bad.append(f"{name}: thickening ignores magnitude, {seq[zero + 1:]}")
-    # The deepest step, counted across fixtures rather than demanded of each.
-    # flat-bands legitimately reads the same at -3 and -2 (Zhang-Suen has
-    # reached a skeleton and further rounds correctly do nothing), so requiring
-    # all six would fail the healthy build. A depth-capped thinner moves none.
-    if deep_moves < MIN_RESPONDING:
-        bad.append(f"-3 is indistinguishable from -2 on "
-                   f"{len(STROKE_NAMES) - deep_moves}/{len(STROKE_NAMES)} "
-                   f"fixtures (need {MIN_RESPONDING} moving); the deepest "
-                   f"thinning setting is not reaching the image")
+    # The deepest step, demanded of every fixture outside DEEPEST_MAY_CONVERGE.
+    # flat-bands legitimately reads the same at -3 and -2 (Zhang-Suen has reached
+    # a skeleton and further rounds correctly do nothing), so it is named. A
+    # count instead of names was worth little: a thinner that capped depth at 2
+    # for "busy" pages only froze saturated-ink and full-bleed, scored exactly
+    # 3/6 against a floor of 3, and passed.
+    for name in STROKE_NAMES:
+        seq = [data[name]["line_width"][str(w)] for w in WIDTHS]
+        if seq[0] == seq[1] and name not in DEEPEST_MAY_CONVERGE:
+            bad.append(f"{name}: -3 is indistinguishable from -2 "
+                       f"(both {seq[0]}%); the deepest thinning setting is not "
+                       f"reaching the image")
+
+    # The exclusion above has to keep earning itself. STROKE_NAMES drops
+    # ink-ramp because a smooth gradient gives adaptive threshold no edges to
+    # find, so it reads 0.00% at every width and there is no stroke to thin.
+    # That is a claim like any other, and until now nothing checked it — leaving
+    # a filter expression that any future fixture could be added to in order to
+    # dodge a failure, silently shrinking what these claims cover.
+    for name in NAMES:
+        if name in STROKE_NAMES:
+            continue
+        vals = [data[name]["line_width"][str(w)] for w in WIDTHS]
+        if any(v != 0.0 for v in vals):
+            bad.append(f"{name} is excluded from the line-width claims on the "
+                       f"grounds that it has no strokes, but it inks {vals} "
+                       f"across the widths — either include it or change the "
+                       f"reason it is excluded")
     return not bad, (f"monotonic everywhere; smallest thinning {min(thins):.2f}pp, "
                      f"smallest thickening {min(thicks):.2f}pp (floor {MIN_DELTA_PP}pp "
                      f"each); magnitude distinguishable on both sides; "
-                     f"{deep_moves}/{len(STROKE_NAMES)} still move at -3 "
-                     f"(floor {MIN_RESPONDING})"
+                     f"{deep_moves}/{len(STROKE_NAMES)} still move at -3, every "
+                     f"one outside {sorted(DEEPEST_MAY_CONVERGE)}"
                      if not bad else "; ".join(bad))
 
 
@@ -407,9 +469,10 @@ def main():
                 was = old.get(name, {}).get(section, {}).get(key)
                 if was != now:
                     drift.append(f"{name}/{section}/{key}: {was} -> {now}")
-        was_cut = old.get(name, {}).get("ink_cutoff_at_4pct")
-        if was_cut != data[name]["ink_cutoff_at_4pct"]:
-            drift.append(f"{name}/cutoff: {was_cut} -> {data[name]['ink_cutoff_at_4pct']}")
+        for scalar in ("ink_cutoff_at_4pct", "distinct_v"):
+            was_s = old.get(name, {}).get(scalar)
+            if was_s != data[name][scalar]:
+                drift.append(f"{name}/{scalar}: {was_s} -> {data[name][scalar]}")
 
     print("\nBaseline\n")
     if drift:

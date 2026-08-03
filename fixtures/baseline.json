@@ -1,5 +1,6 @@
 {
   "fine-detail": {
+    "distinct_v": 2,
     "ink_cutoff_at_4pct": 31,
     "ink_levels": {
       "1": 8.28,
@@ -26,6 +27,7 @@
     }
   },
   "flat-bands": {
+    "distinct_v": 6,
     "ink_cutoff_at_4pct": 21,
     "ink_levels": {
       "1": 16.67,
@@ -52,6 +54,7 @@
     }
   },
   "full-bleed": {
+    "distinct_v": 162,
     "ink_cutoff_at_4pct": 75,
     "ink_levels": {
       "1": 5.96,
@@ -78,6 +81,7 @@
     }
   },
   "grey-ink": {
+    "distinct_v": 212,
     "ink_cutoff_at_4pct": 31,
     "ink_levels": {
       "1": 5.85,
@@ -104,6 +108,7 @@
     }
   },
   "ink-ramp": {
+    "distinct_v": 240,
     "ink_cutoff_at_4pct": 10,
     "ink_levels": {
       "1": 1.25,
@@ -130,6 +135,7 @@
     }
   },
   "pale-ink": {
+    "distinct_v": 40,
     "ink_cutoff_at_4pct": 237,
     "ink_levels": {
       "1": 3.98,
@@ -156,6 +162,7 @@
     }
   },
   "saturated-ink": {
+    "distinct_v": 169,
     "ink_cutoff_at_4pct": 108,
     "ink_levels": {
       "1": 1.35,
