@@ -235,29 +235,62 @@
 
 ## Housekeeping
 
-- **Dead assignment in `add_reference()`**: `x0, y0 = x1 - 0, y1 - 0` — `x0` is
-  never read (pyflakes). Pre-existing and unrelated to the line-width/ink work,
-  so it was left out of that diff rather than padding it. (2026-08-02)
+- **`--ref-margin` and `--ref-scale` are the two unvalidated CLI flags, and a
+  negative margin is a crash.** `main()` validates `--block-size` and `--ink`
+  (`coloringify.py:249-254`) and prints a clean stderr message; the two guide
+  flags reach `add_reference()` straight from argparse. Measured 2026-08-04 on a
+  240x180 fixture rather than reasoned about, because the review that raised it
+  had the failing and silent cases the wrong way round:
 
-- **`opencv-python` bundles LGPL binaries, and the repo has no `LICENSE` file to
-  state what that means here.** OpenCV's core is Apache 2.0, but the wheel's own
-  METADATA says "All wheels ship with FFmpeg licensed under the LGPLv2.1" and
-  "Non-headless Linux wheels ship with Qt 5 licensed under the LGPLv3" — verified
-  against the installed 4.13.0.92 wheel rather than taken from the review that
-  raised it. Pre-existing and unchanged by the `<5` bound: it holds identically
-  at 4.8 and 4.13, which is why it is recorded here rather than fixed in that
-  diff. It matters only under one condition, and that condition is currently
-  absent: LGPL carries relink-ability obligations that bite when software is
-  distributed as a closed-source frozen binary. This is a source-distributed CLI
-  (`pip install -r requirements.txt`) plus a static Pages site, so nothing is
-  being shipped that triggers it. Two things to settle rather than leave
-  implicit: the repository has no `LICENSE` file at all, so its own terms are
-  undeclared; and if the CLI is ever frozen with PyInstaller or similar, switch
-  to `opencv-python-headless` first, which drops the Qt5/LGPLv3 bundle (FFmpeg's
-  LGPLv2.1 is in every variant and would still need handling).
-  (supply-chain review, 2026-08-04)
+  | input | behaviour |
+  | --- | --- |
+  | `--ref-margin` 0 through 300 | no error; thumbnail silently mispositioned via numpy negative-index wraparound once `x1` goes negative |
+  | `--ref-margin -1` (and below) | `ValueError: could not broadcast input array` as a raw traceback |
+  | `--ref-scale` 0.0, 1.0, 1.5, 3.0 | no error; the `thumb_h > h - 2*margin` clamp absorbs oversize |
+
+  So the only crashing input is a negative margin, and it fails at `-1` — a
+  plausible typo rather than an absurd value. Everything else degrades quietly,
+  which is the worse half: a 300px margin on a 240px image produces a finished
+  page with the guide in the wrong place and exit code 0. Fix is four lines
+  mirroring the existing validation block. Left out of the housekeeping diff
+  because rejecting inputs that currently succeed is a behaviour change that
+  wants its own decision, not a rider on a dead-code removal. Pre-existing;
+  neither introduced nor worsened by that diff. (security review, 2026-08-04)
+
+- **If the CLI is ever frozen into a distributable binary, move to
+  `opencv-python-headless` first.** The wheel's own METADATA says "All wheels
+  ship with FFmpeg licensed under the LGPLv2.1" and "Non-headless Linux wheels
+  ship with Qt 5 licensed under the LGPLv3" — verified against the installed
+  4.13.0.92 wheel rather than taken from the review that raised it. LGPL's
+  relink-ability obligations bite on closed-source frozen binaries, and nothing
+  here is one: this is a source-distributed CLI (`pip install -r
+  requirements.txt`) plus a static Pages site, so the condition is currently
+  absent and no action is due. Recorded as a conditional rather than a task, so
+  that PyInstaller-ing this later is a decision rather than a surprise. Headless
+  drops the Qt5/LGPLv3 bundle; FFmpeg's LGPLv2.1 ships in every variant and
+  would still need handling. Unaffected by declaring this project MIT — that
+  governs the code in this repository, not the binaries its dependency vendors.
+  (supply-chain review 2026-08-04, narrowed 2026-08-04)
 
 ## Completed
+
+- **The repository had no `LICENSE` file, so its own terms were undeclared.**
+  A public repo with no licence is all-rights-reserved by default: readable, but
+  not legally reusable, which was an oversight rather than a decision. Now MIT.
+  Surfaced by the supply-chain review of PR #6 while it was checking the
+  dependency's licence, which is how a question about OpenCV's Apache 2.0 core
+  turned into a question about this project's own terms. (2026-08-04)
+
+- **Dead assignment in `add_reference()`.** `x0, y0 = x1 - 0, y1 - 0` left `x0`
+  unread (pyflakes), and both `- 0` terms were no-ops, so `y0` was an alias for
+  `y1`. Collapsed to `x1, y1` throughout. Behaviour-preserving, and proved
+  rather than assumed: neither harness covers this function — `report.py` renders
+  with `no_reference=True` and `parity.py`'s `RENDER_CELL` passes `thumb: false`
+  — so it was checked by rendering all 7 fixtures at four scale/margin
+  combinations (including the `margin=0` and `margin=40` edges) before and after,
+  and confirming all 28 outputs byte-identical. That the check had to be built
+  by hand is the argument for the colour guide coverage item above.
+  (2026-08-02, fixed 2026-08-04)
 
 - **Nothing ran the regression net automatically.** There was no CI in this
   repository at all — the only workflow on the remote was GitHub's own
