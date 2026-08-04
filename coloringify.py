@@ -20,6 +20,7 @@ so `--style threshold --line-width -2` gives thin *single* outlines.
 """
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -146,13 +147,46 @@ def despeckle(binary, min_area=12):
 
 def add_reference(outline, color_img, scale: float, margin: int):
     """Paste a small full-color thumbnail in the top-right corner as a color guide."""
+    # main() already restricts --ref-scale to (0, 1], but this function is
+    # importable and reachable without it, and an out-of-range scale surfaces
+    # far from its cause: 1.1 on a wide, short page raises a bare numpy
+    # "could not broadcast" from the paste below, and a non-finite one raises
+    # OverflowError from int(). Both name the symptom rather than the input, so
+    # fail here instead, where the offending value can be quoted. Unlike the
+    # margin clamp further down this is a raise, not a clamp — a margin that
+    # does not fit a particular page is a runtime condition worth adapting to,
+    # whereas a scale outside (0, 1] is the caller asking for something with no
+    # sensible rendering.
+    if not (math.isfinite(scale) and 0 < scale <= 1):
+        raise ValueError(f"scale must be a finite number in (0, 1]; got {scale!r}")
+
     # Outline is single-channel; promote to BGR so we can paint color onto it.
     canvas = cv2.cvtColor(outline, cv2.COLOR_GRAY2BGR)
     h, w = canvas.shape[:2]
 
     thumb_w = max(1, int(w * scale))
     thumb_h = max(1, int(thumb_w * color_img.shape[0] / color_img.shape[1]))
-    # Don't let the thumbnail overflow a small/tall page.
+    # A margin the canvas cannot accommodate used to drive x1 negative, which
+    # numpy reads as a wraparound index rather than an error: the guide landed
+    # somewhere else entirely and the run still exited 0. Clamp here rather than
+    # in main(), because the flag is validated once but the batch can hold
+    # images of any size, and only this function knows the one in front of it.
+    #
+    # The vertical bound is half the slack, not all of it, so that the overflow
+    # guard below cannot then fire and shrink the thumbnail to a single pixel —
+    # which is on-canvas and deterministic but just as silently wrong as the
+    # wraparound it replaced.
+    fitted = max(0, min(margin, w - thumb_w, (h - thumb_h) // 2))
+    if fitted != margin:
+        print(f"  warn  --ref-margin {margin} does not fit a {w}x{h} page; "
+              f"using {fitted}.", file=sys.stderr)
+    margin = fitted
+    # Don't let the thumbnail overflow a small/tall page. This looks unreachable
+    # now that scale is pinned to (0, 1] — a review argued exactly that, having
+    # swept canvas shapes without varying the source's — but thumb_h comes from
+    # the *source* image's aspect ratio, not the canvas's, so a tall source
+    # overflows a short page at any scale. It fires on a 50x400 page with an
+    # ordinary 240x180 source at the default 0.25. Load-bearing; do not delete.
     if thumb_h > h - 2 * margin:
         thumb_h = max(1, h - 2 * margin)
         thumb_w = max(1, int(thumb_h * color_img.shape[1] / color_img.shape[0]))
@@ -251,6 +285,18 @@ def main() -> int:
         return 1
     if not 0 < args.ink <= 100:
         print("--ink must be greater than 0 and at most 100.", file=sys.stderr)
+        return 1
+    # The two colour-guide flags reach add_reference() straight from argparse.
+    # A negative margin was the one input that crashed outright, and it crashed
+    # at -1: `canvas[y1:y1 + thumb_h, ...]` with a negative y1 produces a slice
+    # that cannot take the thumbnail, and numpy raises a bare broadcast error.
+    if args.ref_margin < 0:
+        print("--ref-margin must be 0 or greater.", file=sys.stderr)
+        return 1
+    # Above 1 asks for a thumbnail wider than the page it sits on; at or below 0
+    # the guide degenerates to a single pixel. Both used to be accepted silently.
+    if not 0 < args.ref_scale <= 1:
+        print("--ref-scale must be greater than 0 and at most 1.", file=sys.stderr)
         return 1
     out_dir.mkdir(parents=True, exist_ok=True)
 

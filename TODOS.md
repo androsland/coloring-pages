@@ -235,28 +235,6 @@
 
 ## Housekeeping
 
-- **`--ref-margin` and `--ref-scale` are the two unvalidated CLI flags, and a
-  negative margin is a crash.** `main()` validates `--block-size` and `--ink`
-  (`coloringify.py:249-254`) and prints a clean stderr message; the two guide
-  flags reach `add_reference()` straight from argparse. Measured 2026-08-04 on a
-  240x180 fixture rather than reasoned about, because the review that raised it
-  had the failing and silent cases the wrong way round:
-
-  | input | behaviour |
-  | --- | --- |
-  | `--ref-margin` 0 through 300 | no error; thumbnail silently mispositioned via numpy negative-index wraparound once `x1` goes negative |
-  | `--ref-margin -1` (and below) | `ValueError: could not broadcast input array` as a raw traceback |
-  | `--ref-scale` 0.0, 1.0, 1.5, 3.0 | no error; the `thumb_h > h - 2*margin` clamp absorbs oversize |
-
-  So the only crashing input is a negative margin, and it fails at `-1` — a
-  plausible typo rather than an absurd value. Everything else degrades quietly,
-  which is the worse half: a 300px margin on a 240px image produces a finished
-  page with the guide in the wrong place and exit code 0. Fix is four lines
-  mirroring the existing validation block. Left out of the housekeeping diff
-  because rejecting inputs that currently succeed is a behaviour change that
-  wants its own decision, not a rider on a dead-code removal. Pre-existing;
-  neither introduced nor worsened by that diff. (security review, 2026-08-04)
-
 - **If the CLI is ever frozen into a distributable binary, move to
   `opencv-python-headless` first.** The wheel's own METADATA says "All wheels
   ship with FFmpeg licensed under the LGPLv2.1" and "Non-headless Linux wheels
@@ -273,6 +251,63 @@
   (supply-chain review 2026-08-04, narrowed 2026-08-04)
 
 ## Completed
+
+- **`--ref-margin` and `--ref-scale` reached `add_reference()` straight from
+  argparse, and a negative margin was a crash.** `main()` already validated
+  `--block-size` and `--ink`; the two guide flags were the pair nothing checked.
+  Measured on a 240x180 fixture before fixing, because the review that raised it
+  had the failing and silent cases the wrong way round: `--ref-margin -1` (a
+  plausible typo, not an absurd value) raised a bare
+  `ValueError: could not broadcast input array`, while *every* other input —
+  margins up to 300 on a 240px page, `--ref-scale` at 0.0, 1.5 and 3.0 — produced
+  a finished page and exit 0, with the guide silently misplaced by numpy's
+  negative-index wraparound once `x1` went below zero.
+
+  Closed in two halves, because the two failures have different homes. `main()`
+  now rejects `--ref-margin < 0` and `--ref-scale` outside `(0, 1]` in the style
+  of the existing block. `add_reference()` clamps the margin per image, since the
+  flag is validated once but a batch holds images of any size and only that
+  function knows the one in front of it; when the requested margin does not fit
+  it says so on stderr rather than quietly substituting. The vertical bound is
+  half the slack rather than all of it, so the pre-existing overflow guard cannot
+  then fire and shrink the thumbnail to a single pixel — on-canvas and
+  deterministic, but as silently wrong as the wraparound it replaced.
+
+  One thing the fix deliberately did not do is remove the overflow guard that
+  follows the clamp. Review argued it had become unreachable now that `scale` is
+  pinned to `(0, 1]`, with a trace over 11,280 calls showing zero executions.
+  That was wrong, and checking it was worth the minute: `thumb_h` derives from
+  the *source image's* aspect ratio, not the canvas's, so a tall source
+  overflows a short page at any scale — the trace had swept canvas shapes
+  without varying the source's. It fires on a 50x400 page with an ordinary
+  240x180 source at the default 0.25. The guard is load-bearing and now carries
+  a comment saying so, since a reader who reasons only about the canvas will
+  reach the same wrong conclusion.
+
+  `scale` is guarded too, but by a raise rather than a clamp, and the asymmetry
+  is deliberate: a margin that does not fit a particular page is a runtime
+  condition worth adapting to, whereas a scale outside `(0, 1]` is a request
+  with no sensible rendering. The review of the first fix caught that
+  `add_reference()` defended itself on `margin` and not on `scale` while being
+  importable — `fixtures/report.py` calls it without going through `main()`.
+  Measured rather than accepted as described, which turned up one case the
+  review had missed: `scale=1.1` on a 35x10 page raised a bare numpy
+  `could not broadcast`, NaN raised `ValueError` on every canvas tried, and
+  **infinity raised `OverflowError`** from `int()`. All three named the symptom
+  rather than the input. The function now rejects any non-finite or
+  out-of-range scale up front, quoting the value.
+
+  Verified against the gap that made this necessary in the first place: no
+  harness covers `add_reference()`, so all 7 fixtures were rendered at four
+  scale/margin combinations before and after and confirmed byte-identical; the
+  previously-broken margins re-measured to show the guide keeps its full size
+  on-canvas in every case; and the scale guard swept over 7 canvas shapes
+  (including 1x1, 2x2, 10x10000 and 10000x10) against 8 bad values each, all
+  rejected with a named error, with valid scales from 1e-6 to 1.0 still
+  rendering on every shape. Not a parity change — the browser has no equivalent
+  exposure, computing its margin as `round(W*0.015)+6` and bounding its
+  guide-size slider to 10-40% (`docs/index.html:1020`), so none of these inputs
+  is reachable there. (security review 2026-08-04, fixed 2026-08-04)
 
 - **The repository had no `LICENSE` file, so its own terms were undeclared.**
   A public repo with no licence is all-rights-reserved by default: readable, but
