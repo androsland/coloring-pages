@@ -1,1 +1,7 @@
-opencv-python>=4.8
+# Bounded to the 4 major on purpose. The browser twin loads
+# https://docs.opencv.org/4.x/opencv.js, which is itself major-bounded, so an
+# unbounded range here is the only side that can wander across a major — and it
+# did: the first CI run resolved this to 5.0.0.93 against 4.13.0 locally and in
+# the browser. Raising this ceiling means moving the page's CDN path in the same
+# commit, or CI goes back to reporting on a different OpenCV than ships.
+opencv-python>=4.8,<5

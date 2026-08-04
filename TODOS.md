@@ -159,35 +159,43 @@
   has no flag for. Deliberately left alone; the point of recording it is that
   "parity passes" must not be read as "the guide matches". (2026-08-03)
 
-- **Neither side pins the OpenCV that runs the maths.** `requirements.txt` pins
-  `opencv-python>=4.8` and the page loads
-  `https://docs.opencv.org/4.x/opencv.js`, which redirects to whatever the
-  latest release is — 4.13.0 on 2026-08-03, matching the locally installed
-  build, which is luck rather than design. The two can drift apart without a
-  commit on either side, and OpenCV's SIMD paths have differed numerically
-  across builds before, so parity could start failing for reasons that have
-  nothing to do with this repository. `parity.py` prints both versions and warns
-  when they differ so a failure can be triaged, but nothing holds them together.
-  No longer hypothetical — the first CI run (PR #5, 2026-08-04) resolved
-  `opencv-python>=4.8` to **5.0.0.93** on the runner, against **4.13.0** locally
-  and **4.13.0** in the browser from the CDN. So CI's green currently reports on
-  a different OpenCV major version than any developer machine. Everything still
-  agreed: 147/147 maths cells, 15/15 wiring steps, and `baseline.json`'s exact
-  float equality held across the 4 -> 5 boundary. That is luck rather than
-  design, and it is the last cheap warning this will give. The `WARN` fired
-  correctly and named the cause, which is the part that worked.
-  Same root cause as the `baseline.json` item below. Sharper since 2026-08-04:
-  parity now runs on every push, so a CDN-side release turns CI red on a commit
-  that changed nothing, and the first red build after a bump is the one that
-  teaches people to ignore the colour. That is the reliability half. The other
-  half is that fetching unpinned third-party JavaScript went from something a
-  person did occasionally to something a runner does unattended on every push
-  and every pull request — more frequent exposure to `docs.opencv.org`, though
-  not a worse one per event: the jobs hold `permissions: contents: read`,
-  reference no secret, and use `pull_request` rather than `pull_request_target`,
-  so a fork's run gets a read-only token and nothing to exfiltrate. Pinning the
-  version would close both halves at once. (2026-08-03, amended and
-  supply-chain review 2026-08-04)
+- **Neither side pins OpenCV to an exact build — the majors now match, the
+  minors still float.** Narrowed 2026-08-04: `requirements.txt` is
+  `opencv-python>=4.8,<5`, and the page loads
+  `https://docs.opencv.org/4.x/opencv.js`. Both sides are bounded to the 4
+  major, so the cross-major skew that CI hit is closed. What remains is minor
+  drift inside 4.x — `/4.x/` redirects to whatever the newest 4 release is
+  (measured 2026-08-04: `4.x` -> `4.13.0`, 10.9 MB), so a CDN-side point release
+  still moves the browser without a commit here. OpenCV's SIMD paths have
+  differed numerically across builds before, so parity can still start failing
+  for reasons that have nothing to do with this repository. `parity.py` prints
+  both versions and warns when they differ, which is what made the original
+  divergence triageable. Same root cause as the `baseline.json` item below,
+  which is now the sharper of the two.
+
+  Raising the ceiling to 5 is a decision with a measured price, taken and
+  declined on 2026-08-04: `opencv.js` is **16.2 MB** on 5.0 against **10.9 MB**
+  on 4.13.0, a 48% larger download on every cold load of the live page. All 15
+  functions the page calls exist in the 5.0 JS build (probed in a real browser,
+  so the upgrade is possible rather than blocked), and none of OpenCV 5's
+  headline changes — C API removal, C++17, Python 2 drop, G-API and ML moved to
+  contrib — touch a Python-plus-JS consumer of thirteen core imgproc calls. The
+  one change that does land here is the revised `resize()` interpolation, and
+  this pipeline's only `resize()` is the colour guide thumbnail at
+  `coloringify.py:159` — which is the region no harness covers. Pay 5.2 MB for
+  no new capability, with the one behavioural change aimed at the blind spot:
+  no. Revisit when the guide is covered, or when 4.x stops receiving fixes.
+
+  The supply-chain half is unchanged by the bound: fetching third-party
+  JavaScript unpinned at the point release is something a runner now does
+  unattended on every push and pull request. Not worse per event — the jobs hold
+  `permissions: contents: read`, reference no secret, and use `pull_request`
+  rather than `pull_request_target`, so a fork's run gets a read-only token and
+  nothing to exfiltrate. An exact pin on both sides would close it, at the cost
+  of a CDN path that can 404 and take the live page with it: `/4.13.0/` serves
+  200 today but `/4.12.0/` is already 404, so the published set is curated
+  rather than complete. (2026-08-03, amended supply-chain review 2026-08-04,
+  narrowed 2026-08-04)
 
 - **The transparency path is untested on both sides.** `load_bgr()` composites
   alpha over white and `makeColoringPage` does the same by drawing onto a
@@ -230,6 +238,24 @@
 - **Dead assignment in `add_reference()`**: `x0, y0 = x1 - 0, y1 - 0` — `x0` is
   never read (pyflakes). Pre-existing and unrelated to the line-width/ink work,
   so it was left out of that diff rather than padding it. (2026-08-02)
+
+- **`opencv-python` bundles LGPL binaries, and the repo has no `LICENSE` file to
+  state what that means here.** OpenCV's core is Apache 2.0, but the wheel's own
+  METADATA says "All wheels ship with FFmpeg licensed under the LGPLv2.1" and
+  "Non-headless Linux wheels ship with Qt 5 licensed under the LGPLv3" — verified
+  against the installed 4.13.0.92 wheel rather than taken from the review that
+  raised it. Pre-existing and unchanged by the `<5` bound: it holds identically
+  at 4.8 and 4.13, which is why it is recorded here rather than fixed in that
+  diff. It matters only under one condition, and that condition is currently
+  absent: LGPL carries relink-ability obligations that bite when software is
+  distributed as a closed-source frozen binary. This is a source-distributed CLI
+  (`pip install -r requirements.txt`) plus a static Pages site, so nothing is
+  being shipped that triggers it. Two things to settle rather than leave
+  implicit: the repository has no `LICENSE` file at all, so its own terms are
+  undeclared; and if the CLI is ever frozen with PyInstaller or similar, switch
+  to `opencv-python-headless` first, which drops the Qt5/LGPLv3 bundle (FFmpeg's
+  LGPLv2.1 is in every variant and would still need handling).
+  (supply-chain review, 2026-08-04)
 
 ## Completed
 
