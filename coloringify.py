@@ -158,11 +158,10 @@ def add_reference(outline, color_img, scale: float, margin: int):
         thumb_w = max(1, int(thumb_h * color_img.shape[1] / color_img.shape[0]))
     thumb = cv2.resize(color_img, (thumb_w, thumb_h), interpolation=cv2.INTER_AREA)
 
-    x1, y1 = w - margin - thumb_w, margin
-    x0, y0 = x1 - 0, y1 - 0  # top-left of thumb
-    canvas[y0:y0 + thumb_h, x1:x1 + thumb_w] = thumb
+    x1, y1 = w - margin - thumb_w, margin  # top-left of thumb
+    canvas[y1:y1 + thumb_h, x1:x1 + thumb_w] = thumb
     # Thin black frame so the guide reads as a separate inset.
-    cv2.rectangle(canvas, (x1 - 1, y0 - 1), (x1 + thumb_w, y0 + thumb_h), (0, 0, 0), 2)
+    cv2.rectangle(canvas, (x1 - 1, y1 - 1), (x1 + thumb_w, y1 + thumb_h), (0, 0, 0), 2)
     return canvas
 
 
