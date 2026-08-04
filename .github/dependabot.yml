@@ -1,0 +1,21 @@
+# Keeps the commit-SHA pins in .github/workflows/ from going stale.
+#
+# A SHA pin closes the mutable-tag hole — nobody can repoint `@v7` at different
+# code and have it run here — but it opens a slower one: a pin never updates, so
+# the action stops receiving its own security fixes and nothing says so. This
+# file is the other half of that trade.
+#
+# Scoped to `github-actions` on purpose. The Python dependencies are ranges
+# (`opencv-python>=4.8`, `playwright>=1.62`) rather than pins, and the fact that
+# neither side pins the OpenCV that runs the maths is a deliberate open item in
+# TODOS.md with its own decision attached. Pointing a bot at it would generate
+# pull requests against a question that has not been answered yet.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci

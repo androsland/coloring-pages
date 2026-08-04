@@ -125,15 +125,25 @@
 
 ## Fixtures and regression checks
 
-- **Nothing runs `fixtures/report.py` or `fixtures/parity.py` automatically.**
-  There is no CI in this repo at all, so the whole regression net only fires
-  when someone remembers to run it by hand. Every claim in `fixtures/` is worth
-  exactly as much as that habit, and parity is worth less than that — it is the
-  check most likely to be skipped, because it is the one with dependencies to
-  install. A workflow running `python3 fixtures/report.py` on push would close
-  half of it; adding `parity.py` needs `requirements-dev.txt`, `python3 -m
-  playwright install chromium`, and network egress to the OpenCV CDN in the
-  runner. (security review, 2026-08-03; parity added 2026-08-03)
+- **Nothing checks that `make_fixtures.py` still redraws the committed PNGs.**
+  The whole premise of `fixtures/` is that the images are drawn by code rather
+  than collected, which is what makes every number here re-derivable from a
+  clean checkout. Nothing holds the generator to the artefacts, though: edit
+  `make_fixtures.py` and the committed PNGs keep the old geometry, so the claims
+  keep passing against images the generator would no longer produce and the
+  "drawn by code" property quietly stops being true. Measured 2026-08-04: a
+  regeneration into a scratch tree reproduces all seven byte-identically, so the
+  gap is unguarded rather than already broken. Cheap to close — regenerate and
+  `cmp` in the `report` job — and deliberately left out of the CI diff, which
+  was scoped to running the checks that already existed. (2026-08-04)
+
+- **CI runs one Python version.** `checks.yml` pins `3.10` to match the machine
+  the repo is developed on, so a red build means the code rather than the
+  interpreter. Nothing therefore exercises 3.11+, where a deprecation or a
+  changed stdlib default would land silently until someone upgrades. A matrix is
+  the obvious fix and was skipped on purpose: it multiplies the runs and every
+  extra failure mode needs triaging, which is a decision worth taking on its own
+  rather than smuggling into the workflow that introduces CI. (2026-08-04)
 
 - **The colour guide is the one thing the two twins genuinely draw
   differently.** `parity.py` renders with the guide off and says so, because
@@ -158,7 +168,26 @@
   across builds before, so parity could start failing for reasons that have
   nothing to do with this repository. `parity.py` prints both versions and warns
   when they differ so a failure can be triaged, but nothing holds them together.
-  Same root cause as the `baseline.json` item below. (2026-08-03)
+  No longer hypothetical — the first CI run (PR #5, 2026-08-04) resolved
+  `opencv-python>=4.8` to **5.0.0.93** on the runner, against **4.13.0** locally
+  and **4.13.0** in the browser from the CDN. So CI's green currently reports on
+  a different OpenCV major version than any developer machine. Everything still
+  agreed: 147/147 maths cells, 15/15 wiring steps, and `baseline.json`'s exact
+  float equality held across the 4 -> 5 boundary. That is luck rather than
+  design, and it is the last cheap warning this will give. The `WARN` fired
+  correctly and named the cause, which is the part that worked.
+  Same root cause as the `baseline.json` item below. Sharper since 2026-08-04:
+  parity now runs on every push, so a CDN-side release turns CI red on a commit
+  that changed nothing, and the first red build after a bump is the one that
+  teaches people to ignore the colour. That is the reliability half. The other
+  half is that fetching unpinned third-party JavaScript went from something a
+  person did occasionally to something a runner does unattended on every push
+  and every pull request — more frequent exposure to `docs.opencv.org`, though
+  not a worse one per event: the jobs hold `permissions: contents: read`,
+  reference no secret, and use `pull_request` rather than `pull_request_target`,
+  so a fork's run gets a read-only token and nothing to exfiltrate. Pinning the
+  version would close both halves at once. (2026-08-03, amended and
+  supply-chain review 2026-08-04)
 
 - **The transparency path is untested on both sides.** `load_bgr()` composites
   alpha over white and `makeColoringPage` does the same by drawing onto a
@@ -190,7 +219,11 @@
   `despeckle=False`, so `despeckle()` could stop honouring its flag and every
   claim would still pass — verified by making it unconditional in `convert()`.
   Needs a fixture with specks of known area and a claim that they go at
-  `--min-area` and survive below it. (2026-08-03)
+  `--min-area` and survive below it. Since 2026-08-04 it is the single entry in
+  `falsify.py`'s `KNOWN_BLIND`, so the gap is held open by a check that fails
+  rather than by this bullet: closing it means deleting the entry in the same
+  commit, or `falsify.py` fails for overstating what it cannot see.
+  (2026-08-03, gated 2026-08-04)
 
 ## Housekeeping
 
@@ -199,6 +232,27 @@
   so it was left out of that diff rather than padding it. (2026-08-02)
 
 ## Completed
+
+- **Nothing ran the regression net automatically.** There was no CI in this
+  repository at all — the only workflow on the remote was GitHub's own
+  `pages-build-deployment` — so every claim in `fixtures/` was worth exactly as
+  much as somebody's habit of running it, and `parity.py` was worth less than
+  that, being the one check with dependencies to install. Added two workflows,
+  split by what makes each check fail rather than by how long it takes.
+  `checks.yml` runs `report.py` (0.45s, `requirements.txt` only) and `parity.py`
+  (6.7s of checking behind a ~1 minute Chromium install) on every push and pull
+  request, because those break when the pipeline changes. `mutations.yml` runs
+  `falsify.py` (20s) and `parity.py --falsify` (~19 minutes) weekly and on
+  demand, because those break when the *checking* changes, which is rarer.
+  `falsify.py` had to be made to gate first: it printed its misses and exited 0
+  regardless, so as a CI job it could never have gone red, and a green job that
+  could not have failed reads as coverage without being any. It now carries a
+  `KNOWN_BLIND` dict mirroring `parity.py`'s — one entry today, `despeckle
+  ignores its flag`, with the measurement — and fails when the miss set differs
+  in either direction. Both directions were checked by breaking the list on
+  purpose: emptying it fails with "new blind spots", adding a mutation that is
+  caught fails with "the list now overstates". Read-only `permissions`, no
+  secrets referenced, `actions/*` on major tags. (2026-08-04)
 
 - **Nothing checked that the browser and the script still agree.** `docs/index.html`
   re-implements the histogram cutoff and the Zhang-Suen thinning in JavaScript,

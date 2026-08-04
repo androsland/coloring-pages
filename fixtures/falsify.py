@@ -17,6 +17,11 @@ than it sounds: `str.replace` no-ops silently on a missed target, so a mutation
 that quietly failed to apply looks identical to a claim that cannot be broken,
 and it has already produced one false "unbreakable" reading here.
 
+This gates rather than reports: it exits non-zero when the set of mutations it
+cannot catch differs from `KNOWN_BLIND` in either direction. Printing the misses
+and trusting the reader to check them against README.md works only while someone
+is reading, which is not the case when this runs unattended.
+
 Nothing is written inside the repository. The working tree is never touched.
 """
 
@@ -138,6 +143,27 @@ MUTATIONS = [
      'STROKE_NAMES = [n for n in NAMES if n not in ("ink-ramp", "flat-bands")]'),
 ]
 
+# The misses this battery is allowed to have, each with the measurement that
+# says why. Same list and same reasoning as `parity.py`'s: printing "only
+# acceptable if README.md lists it as an uncovered gap" trusts whoever is
+# reading to go and look, which holds right up until a claim quietly goes blind
+# and its miss reads as one of the known ones. Both directions matter — a gap
+# that gets closed has to be deleted from here too, or the list starts
+# overstating the blind spots instead of understating them.
+KNOWN_BLIND = {
+    "despeckle ignores its flag": (
+        "`page()` always passes `despeckle=False`, so no claim ever reaches the "
+        "flag's true branch and the mutation has nothing to change. Measured "
+        "rather than asserted: this mutation makes despeckle unconditional in "
+        "`convert()` and every claim still passes. Closing it needs a fixture "
+        "with specks of known area and a claim that they go at `--min-area` and "
+        "survive below it — a new fixture and a new baseline entry, not a wider "
+        "sweep of the existing ones. `parity.py` does compare despeckle output "
+        "between the browser and the script, so the two cannot drift apart "
+        "here; what is missing is a claim about what either should produce."
+    ),
+}
+
 
 def _reset(work):
     if work.exists():
@@ -197,15 +223,31 @@ def main():
                 print(f"  MISSED  {label:<50} every claim passed (exit {rc})")
 
         print(f"\n{len(caught)}/{len(MUTATIONS)} caught.")
+        unexpected = [m for m in hollow if m not in KNOWN_BLIND]
+        closed = [m for m in KNOWN_BLIND if m not in hollow]
         if hollow:
-            print("Not caught, which is only acceptable if README.md lists it as "
-                  "an uncovered gap:")
+            print("\nNot caught:")
             for label in hollow:
+                why = KNOWN_BLIND.get(label)
                 print(f"  - {label}")
-        # Exit 0 even with known gaps: this is a report, not a gate. The gate is
-        # report.py. Exit non-zero only if a mutation could not be applied, which
-        # raises above, or the healthy build is dirty, handled at the top.
-        return 0
+                if why:
+                    print(f"      known: {why}")
+        if unexpected:
+            print("\n  [FAIL] the ones above without a reason are new blind spots. "
+                  "Either fix the claim\n"
+                  "         that should have caught them, or add them to "
+                  "KNOWN_BLIND with the measurement\n"
+                  "         that shows why they cannot be caught. Do not weaken "
+                  "the mutation to get a\n"
+                  "         clean score — that is the hollow claim this file "
+                  "exists to prevent.")
+        if closed:
+            print("\n  [FAIL] these are listed in KNOWN_BLIND but were caught, so "
+                  "the list now overstates\n"
+                  "         the blind spots. Delete them:")
+            for label in closed:
+                print(f"           - {label}")
+        return 1 if (unexpected or closed) else 0
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

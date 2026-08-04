@@ -141,6 +141,13 @@ controls too, so a slider wired to the wrong setting is caught as well as a
 formula that drifted. The one part deliberately excluded is the colour-guide
 inset, which the two genuinely place differently — see `fixtures/README.md`.
 
+Both of those run on every push and pull request
+([`checks.yml`](.github/workflows/checks.yml)). The two mutation batteries that
+check *them* — breaking the pipeline and the page on purpose to confirm
+something notices — run weekly and on demand
+([`mutations.yml`](.github/workflows/mutations.yml)), because what makes them
+fail is an edit to the checking logic rather than to the pipeline.
+
 Line width (works with any style, `0` = leave the style's own stroke alone):
 
 - `--line-width -3 … 3`: how heavy the finished outline is. Negative peels
